@@ -1,0 +1,208 @@
+{{ define "compare" }}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="antialiased">
+    {{ template "nav" . }}
+    <main class="page-main">
+      <section class="page-head">
+        <div>
+          <p class="page-eyebrow">Audits</p>
+          <h1 class="page-title mt-1">Compare Scans</h1>
+          <p class="page-subtitle">Diff hosts and findings between two authorized audits.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <form method="get" action="/compare" class="card-body form-stack">
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div class="field">
+              <label for="compare-base" class="label">Base scan</label>
+              <select id="compare-base" name="base" class="input" required>
+                <option value="">Select base…</option>
+                {{ range .Scans }}
+                <option value="{{ .ID }}" {{ if eq $.BaseID .ID }}selected{{ end }}>{{ .Name }} ({{ .CreatedAt.Format "2006-01-02 15:04" }})</option>
+                {{ end }}
+              </select>
+            </div>
+            <div class="field">
+              <label for="compare-against" class="label">Against scan</label>
+              <select id="compare-against" name="against" class="input" required>
+                <option value="">Select against…</option>
+                {{ range .Scans }}
+                <option value="{{ .ID }}" {{ if eq $.AgainstID .ID }}selected{{ end }}>{{ .Name }} ({{ .CreatedAt.Format "2006-01-02 15:04" }})</option>
+                {{ end }}
+              </select>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary">Compare</button>
+        </form>
+      </section>
+
+      {{ if .Error }}
+      <div class="alert alert-error" role="alert">{{ .Error }}</div>
+      {{ end }}
+
+      {{ if .Diff }}
+      <section class="stat-grid" aria-label="Diff summary">
+        <article class="stat-card">
+          <p class="stat-label">Hosts added</p>
+          <p class="stat-value tone-emerald">{{ .Diff.Summary.HostsAdded }}</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">Hosts removed</p>
+          <p class="stat-value tone-rose">{{ .Diff.Summary.HostsRemoved }}</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">Findings added</p>
+          <p class="stat-value tone-rose">{{ .Diff.Summary.FindingsAdded }}</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">Findings removed</p>
+          <p class="stat-value tone-emerald">{{ .Diff.Summary.FindingsRemoved }}</p>
+        </article>
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div class="card">
+          <div class="card-head"><h2 class="card-title">Hosts added</h2></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Host</th><th>State</th><th>TLS</th></tr></thead>
+              <tbody>
+                {{ if .Diff.HostsAdded }}
+                  {{ range .Diff.HostsAdded }}
+                  <tr>
+                    <td class="cell-mono">{{ .Endpoint.Address }}:{{ .Endpoint.Port }}</td>
+                    <td>{{ .State }}</td>
+                    <td class="cell-mono">{{ if .Service }}{{ .Service.TLSVersion }}{{ else }}&mdash;{{ end }}</td>
+                  </tr>
+                  {{ end }}
+                {{ else }}
+                  <tr><td colspan="3" class="table-empty">None</td></tr>
+                {{ end }}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2 class="card-title">Hosts removed</h2></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Host</th><th>State</th><th>TLS</th></tr></thead>
+              <tbody>
+                {{ if .Diff.HostsRemoved }}
+                  {{ range .Diff.HostsRemoved }}
+                  <tr>
+                    <td class="cell-mono">{{ .Endpoint.Address }}:{{ .Endpoint.Port }}</td>
+                    <td>{{ .State }}</td>
+                    <td class="cell-mono">{{ if .Service }}{{ .Service.TLSVersion }}{{ else }}&mdash;{{ end }}</td>
+                  </tr>
+                  {{ end }}
+                {{ else }}
+                  <tr><td colspan="3" class="table-empty">None</td></tr>
+                {{ end }}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2 class="card-title">Hosts changed</h2></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Host</th><th>Before</th><th>After</th></tr></thead>
+            <tbody>
+              {{ if .Diff.HostsChanged }}
+                {{ range .Diff.HostsChanged }}
+                <tr>
+                  <td class="cell-mono">{{ .Address }}:{{ .Port }}</td>
+                  <td class="cell-mono text-xs">{{ .Before.State }} · NLA {{ .Before.NLARequired }} · {{ .Before.TLSVersion }}</td>
+                  <td class="cell-mono text-xs">{{ .After.State }} · NLA {{ .After.NLARequired }} · {{ .After.TLSVersion }}</td>
+                </tr>
+                {{ end }}
+              {{ else }}
+                <tr><td colspan="3" class="table-empty">None</td></tr>
+              {{ end }}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div class="card">
+          <div class="card-head"><h2 class="card-title">Findings added</h2></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Host</th><th>Finding</th><th>Severity</th></tr></thead>
+              <tbody>
+                {{ if .Diff.FindingsAdded }}
+                  {{ range .Diff.FindingsAdded }}
+                  <tr>
+                    <td class="cell-mono">{{ .Address }}:{{ .Port }}</td>
+                    <td>{{ .Title }}</td>
+                    <td>{{ .Severity }}</td>
+                  </tr>
+                  {{ end }}
+                {{ else }}
+                  <tr><td colspan="3" class="table-empty">None</td></tr>
+                {{ end }}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2 class="card-title">Findings removed</h2></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Host</th><th>Finding</th><th>Severity</th></tr></thead>
+              <tbody>
+                {{ if .Diff.FindingsRemoved }}
+                  {{ range .Diff.FindingsRemoved }}
+                  <tr>
+                    <td class="cell-mono">{{ .Address }}:{{ .Port }}</td>
+                    <td>{{ .Title }}</td>
+                    <td>{{ .Severity }}</td>
+                  </tr>
+                  {{ end }}
+                {{ else }}
+                  <tr><td colspan="3" class="table-empty">None</td></tr>
+                {{ end }}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2 class="card-title">Findings changed</h2></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Host</th><th>Check</th><th>Before</th><th>After</th></tr></thead>
+            <tbody>
+              {{ if .Diff.FindingsChanged }}
+                {{ range .Diff.FindingsChanged }}
+                <tr>
+                  <td class="cell-mono">{{ .Address }}:{{ .Port }}</td>
+                  <td>{{ .Title }}</td>
+                  <td class="cell-mono text-xs">{{ .Before.Severity }}/{{ .Before.Status }}</td>
+                  <td class="cell-mono text-xs">{{ .After.Severity }}/{{ .After.Status }}</td>
+                </tr>
+                {{ end }}
+              {{ else }}
+                <tr><td colspan="4" class="table-empty">None</td></tr>
+              {{ end }}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {{ end }}
+    </main>
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
+{{ end }}

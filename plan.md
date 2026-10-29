@@ -211,15 +211,22 @@ aynıdır. `Finding.Status` değerleri: `vulnerable | potential | not_vulnerable
 
 ### 5.10 `internal/server` + `web/`
 * REST uçları (JSON):
-  * `POST /api/v1/scans` — yeni tarama başlatır
+  * `POST /api/v1/scans` — yeni tarama başlatır (multipart wordlist yükleme destekli)
   * `GET /api/v1/scans` — geçmiş taramalar
   * `GET /api/v1/scans/{id}` — detay + ilerleme
+  * `PATCH /api/v1/scans/{id}` — tarama adını günceller
+  * `DELETE /api/v1/scans/{id}` — bitmiş taramayı ve artifact'larını siler
   * `POST /api/v1/scans/{id}/cancel` — iptal
+  * `POST /api/v1/scans/{id}/pause|resume` — duraklat / devam ettir
+  * `POST /api/v1/scans/{id}/brute` — keşfedilen hostlara kimlik doğrulama re-audit
   * `GET /api/v1/scans/{id}/findings|hosts|screenshots`
   * `GET /api/v1/scans/{id}/report?format=html|csv|pdf`
   * `GET /api/v1/summary` — dashboard özet
+  * `GET /api/v1/scans/{id}/diff?against=` — iki tarama arası diff
+  * `GET/POST/PATCH/DELETE /api/v1/schedules` — yinelenen taramalar
+  * `GET /api/v1/analytics` — tarama-ötesi posture özeti
   * `GET /api/v1/events` — SSE canlı akış (`?scan=` ile filtre)
-* Web sayfaları: `/` dashboard, `/scans`, `/scans/{id}`, `/gallery`, `/reports`.
+* Web sayfaları: `/` dashboard, `/scans`, `/scans/{id}`, `/compare`, `/schedules`, `/gallery`, `/reports`.
 * Görsel dil: rdp_plan.md'deki "Cyber-Command Center" (Slate-950 zemin, indigo/emerald/rose vurgu).
 
 ### 5.11 `internal/reporter`

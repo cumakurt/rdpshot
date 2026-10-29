@@ -1,0 +1,143 @@
+{{ define "schedules" }}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="antialiased">
+    {{ template "nav" . }}
+    <main class="page-main">
+      <section class="page-head">
+        <div>
+          <p class="page-eyebrow">Automation</p>
+          <h1 class="page-title mt-1">Schedules</h1>
+          <p class="page-subtitle">Recurring authorized audits against a fixed target scope.</p>
+        </div>
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 lg:grid-cols-5">
+        <div class="card lg:col-span-2">
+          <div class="card-body">
+            <h2 class="card-title">New schedule</h2>
+            <p class="card-hint">Minimum interval is 5 minutes. Credential checks stay opt-in.</p>
+            <form id="schedule-form" method="post" action="/api/v1/schedules" enctype="multipart/form-data" class="form-stack mt-5">
+              <div class="field">
+                <label for="sched-name" class="label">Name</label>
+                <input id="sched-name" name="name" type="text" placeholder="Nightly estate audit" class="input">
+              </div>
+              <div class="field" data-targets-field>
+                <label for="sched-targets" class="label">Targets</label>
+                <textarea id="sched-targets" name="targets" rows="3"
+                  placeholder="10.0.0.0/24" class="textarea" data-targets-input></textarea>
+                <div class="targets-file-box">
+                  <label for="sched-targets-file" class="label">Or load from file</label>
+                  <input id="sched-targets-file" name="targets_file" type="file"
+                    accept=".txt,.lst,.list,text/plain" class="input" data-targets-file>
+                  <p class="wordlist-hint">One target per line (IP, CIDR, hostname, host:port). Lines starting with # are ignored.</p>
+                  <p class="targets-file-status hidden" data-targets-file-status role="status"></p>
+                </div>
+              </div>
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="field">
+                  <label for="sched-ports" class="label">Ports</label>
+                  <input id="sched-ports" name="ports" type="text" placeholder="3389" class="input">
+                </div>
+                <div class="field">
+                  <label for="sched-interval" class="label">Interval (seconds)</label>
+                  <input id="sched-interval" name="interval_seconds" type="number" min="0" value="86400" class="input">
+                </div>
+              </div>
+              <div class="field">
+                <label for="sched-cron" class="label">Cron expression (optional)</label>
+                <input id="sched-cron" name="cron_expr" type="text" placeholder="0 2 * * 1" class="input input-mono">
+                <p class="wordlist-hint">Five fields: minute hour day-of-month month day-of-week. When set, interval is ignored.</p>
+              </div>
+              <div class="field">
+                <label for="sched-webhook" class="label">Notify webhook URL</label>
+                <input id="sched-webhook" name="notify_webhook" type="url" placeholder="https://hooks.example/rdpshot" class="input">
+              </div>
+              {{ template "wordlist_picker" .Wordlists }}
+              <fieldset class="fieldset">
+                <legend class="fieldset-legend">Checks</legend>
+                <label class="check-row"><input type="checkbox" name="enable_vuln" value="true" checked class="checkbox"> Vulnerability checks</label>
+                <label class="check-row"><input type="checkbox" name="enable_auth" value="true" class="checkbox"> Authentication checks</label>
+                <label class="check-row"><input type="checkbox" name="enable_screens" value="true" class="checkbox"> Screenshots</label>
+                <label class="check-row"><input type="checkbox" name="run_immediately" value="true" class="checkbox"> Run on next tick</label>
+                <label class="check-row"><input type="checkbox" name="notify_on_complete" value="true" class="checkbox"> Notify on completion</label>
+                <label class="check-row"><input type="checkbox" name="notify_on_critical" value="true" checked class="checkbox"> Notify on critical findings</label>
+              </fieldset>
+              <label class="check-card">
+                <input id="sched_ack" type="checkbox" name="ack_authorized" value="true" required class="checkbox mt-0.5">
+                <span>I confirm I am authorized to test these targets on a recurring basis</span>
+              </label>
+              <button type="submit" class="btn btn-primary btn-block">Create schedule</button>
+              <div id="schedule-form-error" class="alert alert-error hidden" role="alert"></div>
+            </form>
+          </div>
+        </div>
+
+        <div class="card lg:col-span-3">
+          <div class="card-head">
+            <h2 class="card-title">Active schedules</h2>
+            <span class="badge badge-slate">{{ len .Schedules }}</span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Cadence</th>
+                  <th>Next run</th>
+                  <th>Last scan</th>
+                  <th><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {{ if .Schedules }}
+                  {{ range .Schedules }}
+                  <tr class="row-hover">
+                    <td>
+                      <p class="cell-strong">{{ .Name }}</p>
+                      <p class="cell-sub">
+                        {{ if .Enabled }}<span class="badge badge-emerald">enabled</span>{{ else }}<span class="badge badge-slate">disabled</span>{{ end }}
+                        · {{ .ID }}
+                      </p>
+                    </td>
+                    <td class="cell-mono">
+                      {{ if .CronExpr }}{{ .CronExpr }}{{ else }}{{ .IntervalSeconds }}s{{ end }}
+                      {{ if .NotifyWebhook }}<p class="cell-sub">webhook</p>{{ end }}
+                    </td>
+                    <td class="cell-mono">
+                      {{ if .NextRunAt }}{{ .NextRunAt.Format "2006-01-02 15:04:05" }}{{ else }}&mdash;{{ end }}
+                    </td>
+                    <td>
+                      {{ if .LastScanID }}
+                      <a href="/scans/{{ .LastScanID }}" class="tone-indigo">{{ .LastScanID }}</a>
+                      {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
+                      {{ if .LastError }}<p class="cell-sub tone-rose">{{ .LastError }}</p>{{ end }}
+                    </td>
+                    <td class="text-right whitespace-nowrap">
+                      <button type="button" class="btn btn-ghost btn-sm" data-schedule-run="{{ .ID }}">Run</button>
+                      {{ if .Enabled }}
+                      <button type="button" class="btn btn-ghost btn-sm" data-schedule-toggle="{{ .ID }}" data-enabled="false">Disable</button>
+                      {{ else }}
+                      <button type="button" class="btn btn-ghost btn-sm" data-schedule-toggle="{{ .ID }}" data-enabled="true">Enable</button>
+                      {{ end }}
+                      <button type="button" class="btn btn-ghost btn-sm" data-schedule-delete="{{ .ID }}">Delete</button>
+                    </td>
+                  </tr>
+                  {{ end }}
+                {{ else }}
+                  <tr><td colspan="5" class="table-empty">No schedules yet.</td></tr>
+                {{ end }}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
+{{ end }}

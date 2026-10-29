@@ -1,6 +1,6 @@
 // Package screenshot captures remote desktop session images after a
-// successful credential check. It drives an external FreeRDP client under a
-// headless X server because a full RDP graphics client is out of scope here.
+// successful credential check. Prefer AutoGrabber: it uses FreeRDP under a
+// headless X server when available, otherwise a pure-Go session-evidence PNG.
 package screenshot
 
 import (

@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 
+	"rdpshot/internal/about"
 	"rdpshot/internal/model"
 )
 
@@ -21,16 +22,22 @@ var reportTemplate = template.Must(template.New("report.html").Parse(reportTempl
 // is a plain string or number so html/template auto-escapes all target-derived
 // content.
 type htmlView struct {
-	ToolName    string
-	ToolVersion string
-	GeneratedAt string
-	Scan        scanView
-	Cards       []cardView
-	Severity    []severityBucket
-	Findings    []findingView
-	Hosts       []hostView
-	Credentials []credentialView
-	Screenshots []screenshotView
+	ToolName     string
+	ToolVersion  string
+	Developer    string
+	Copyright    string
+	GeneratedAt  string
+	Organization string
+	Engagement   string
+	PreparedBy   string
+	FooterNote   string
+	Scan         scanView
+	Cards        []cardView
+	Severity     []severityBucket
+	Findings     []findingView
+	Hosts        []hostView
+	Credentials  []credentialView
+	Screenshots  []screenshotView
 }
 
 type scanView struct {
@@ -96,9 +103,15 @@ func HTML(w io.Writer, d Data) error {
 // buildHTMLView converts the domain data into pre-formatted template values.
 func buildHTMLView(d Data) htmlView {
 	view := htmlView{
-		ToolName:    toolName,
-		ToolVersion: orDash(d.ToolVersion),
-		GeneratedAt: orDash(formatTime(d.GeneratedAt)),
+		ToolName:     toolName,
+		ToolVersion:  orDash(d.ToolVersion),
+		Developer:    about.Developer,
+		Copyright:    about.CopyrightLine(),
+		GeneratedAt:  orDash(formatTime(d.GeneratedAt)),
+		Organization: orDash(d.Branding.Organization),
+		Engagement:   orDash(firstNonEmpty(d.Branding.Engagement, d.Scan.Engagement)),
+		PreparedBy:   orDash(d.Branding.PreparedBy),
+		FooterNote:   orDash(d.Branding.FooterNote),
 		Scan: scanView{
 			Name:  orDash(d.Scan.Name),
 			ID:    orDash(d.Scan.ID),

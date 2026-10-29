@@ -26,6 +26,7 @@ type Options struct {
 	// Blacklist entries (IP, CIDR or hostname) are always excluded.
 	Blacklist []string
 	// MaxTargets bounds the expansion; exceeding it is a hard error.
+	// A non-positive value disables the budget (unlimited expansion).
 	MaxTargets int
 	// Lookup resolves hostnames; defaults to net.DefaultResolver. Injectable for tests.
 	Lookup func(ctx context.Context, host string) ([]net.IP, error)
@@ -108,10 +109,8 @@ func Resolve(ctx context.Context, opts Options) (Result, error) {
 	if len(ports) == 0 {
 		ports = []uint16{DefaultPort}
 	}
+	unlimited := opts.MaxTargets <= 0
 	maxTargets := opts.MaxTargets
-	if maxTargets <= 0 {
-		maxTargets = 65536
-	}
 
 	specs, err := expandFileSpecs(opts.Specs)
 	if err != nil {
@@ -133,7 +132,7 @@ func Resolve(ctx context.Context, opts Options) (Result, error) {
 		if seen[ep] {
 			return nil
 		}
-		if len(seen) >= maxTargets {
+		if !unlimited && len(seen) >= maxTargets {
 			return fmt.Errorf("target: target limit of %d endpoints exceeded", maxTargets)
 		}
 		seen[ep] = true
@@ -156,7 +155,11 @@ func Resolve(ctx context.Context, opts Options) (Result, error) {
 		}
 		switch {
 		case strings.Contains(host, "/"):
-			ips, err := expandCIDR(host, maxTargets-len(seen))
+			budget := -1
+			if !unlimited {
+				budget = maxTargets - len(seen)
+			}
+			ips, err := expandCIDR(host, budget)
 			if err != nil {
 				return Result{}, err
 			}
@@ -277,8 +280,15 @@ func expandCIDR(spec string, budget int) ([]net.IP, error) {
 		// Skip the network and broadcast addresses of IPv4 subnets.
 		usable = total - 2
 	}
-	if usable > int64(budget) {
-		return nil, fmt.Errorf("target: CIDR %q expands to %d addresses, beyond the remaining target budget (%d)", spec, usable, budget)
+	// budget < 0 means unlimited; still reject absurd IPv4 prefixes that would
+	// allocate more than ~16M hosts in one shot (memory safety for /8-scale typos).
+	const softCap = 1 << 24 // 16,777,216
+	if budget < 0 {
+		if usable > softCap {
+			return nil, fmt.Errorf("target: CIDR %q expands to %d addresses (refusing prefixes broader than /8 without an explicit max_targets)", spec, usable)
+		}
+	} else if usable > int64(budget) {
+		return nil, fmt.Errorf("target: CIDR %q expands to %d addresses, beyond the remaining target budget (%d); raise --max-targets / RDSHOT_MAX_TARGETS (or leave max_targets empty for unlimited)", spec, usable, budget)
 	}
 
 	start := ip.Mask(ipNet.Mask).To16()

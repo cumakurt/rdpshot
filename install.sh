@@ -30,7 +30,39 @@ LOG_FILE=""
 
 # ---------------------------------------------------------------- output ---
 
+# terminal_width returns the usable terminal width, clamped to a sane value.
+terminal_width() {
+  local width="${COLUMNS:-}"
+  if [[ ! "$width" =~ ^[0-9]+$ ]] || ((width < 40)); then
+    width="$(tput cols 2>/dev/null || true)"
+  fi
+  if [[ ! "$width" =~ ^[0-9]+$ ]] || ((width < 40)); then
+    width=80
+  fi
+  printf '%s' "$width"
+}
+
 init_colors() {
+  # In-place progress rendering needs a real terminal; otherwise every update
+  # is written as its own line so logs stay readable.
+  if [[ -t 1 && "${TERM:-dumb}" != "dumb" ]]; then
+    INTERACTIVE=1
+  else
+    INTERACTIVE=0
+  fi
+  TERM_WIDTH="$(terminal_width)"
+
+  # Size the bar to the terminal so the surrounding text keeps its room.
+  if ((TERM_WIDTH >= 100)); then
+    BAR_WIDTH=30
+  elif ((TERM_WIDTH >= 80)); then
+    BAR_WIDTH=22
+  elif ((TERM_WIDTH >= 60)); then
+    BAR_WIDTH=16
+  else
+    BAR_WIDTH=10
+  fi
+
   if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
     C_RESET=$'\033[0m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m'
     C_RED=$'\033[31m' C_GREEN=$'\033[32m' C_YELLOW=$'\033[33m'
@@ -45,26 +77,65 @@ init_colors() {
   esac
 }
 
-BAR_WIDTH=26
+BAR_WIDTH=22
 STEP=0
-TOTAL_STEPS=8
+TOTAL_STEPS=7
 STEP_STARTED=0
+INTERACTIVE=0
+TERM_WIDTH=80
+# LINE_DIRTY tracks whether the progress line currently occupies the screen.
+LINE_DIRTY=0
 
-# draw_bar <percent> <state-glyph> <message> <spinner-index>
+# progress_clear erases the in-place progress line so regular messages never
+# collide with it.
+progress_clear() {
+  if ((LINE_DIRTY)); then
+    printf '\r\033[K'
+    LINE_DIRTY=0
+  fi
+}
+
+# progress_finish keeps the last rendered line on screen and moves the cursor
+# below it.
+progress_finish() {
+  if ((LINE_DIRTY)); then
+    printf '\n'
+    LINE_DIRTY=0
+  fi
+}
+
+# draw_bar <percent> <state-glyph> <message>
+# Updates the single progress line in place on a terminal, so the bar grows
+# without scrolling the log.
 draw_bar() {
-  local pct=$1 glyph=$2 message=$3 spin=$4
+  local pct=$1 glyph=$2 message=$3
   local filled=$(( pct * BAR_WIDTH / 100 ))
   (( filled > BAR_WIDTH )) && filled=$BAR_WIDTH
   local bar='' i
   for ((i = 0; i < filled; i++)); do bar+="$BAR_FULL"; done
   for ((i = filled; i < BAR_WIDTH; i++)); do bar+="$BAR_EMPTY"; done
-  local frame="${SPIN[$((spin % ${#SPIN[@]}))]}"
-  printf '\r%s %s[%s%s%s]%s %3d%%  %s %s%s%s %s' \
-    "$C_DIM" "$C_BOLD" "$C_CYAN" "$bar" "$C_BOLD" "$C_RESET" "$pct" \
-    "$glyph" "$C_RESET" "$C_DIM" "$message" "$C_RESET"
+
+  # Truncate long messages so the line never wraps; a wrapped line could not be
+  # overwritten in place anymore.
+  local text="$message"
+  local max_text=$(( TERM_WIDTH - BAR_WIDTH - 15 ))
+  if ((max_text > 3)) && ((${#text} > max_text)); then
+    text="${text:0:max_text-3}..."
+  fi
+
+  if ((INTERACTIVE)); then
+    printf '\r\033[K%s %s[%s%s%s]%s %3d%%  %s %s%s%s' \
+      "$C_DIM" "$C_BOLD" "$C_CYAN" "$bar" "$C_BOLD" "$C_RESET" "$pct" \
+      "$glyph" "$C_DIM" "$text" "$C_RESET"
+    LINE_DIRTY=1
+  else
+    printf '%s %s[%s%s%s]%s %3d%%  %s %s%s%s\n' \
+      "$C_DIM" "$C_BOLD" "$C_CYAN" "$bar" "$C_BOLD" "$C_RESET" "$pct" \
+      "$glyph" "$C_DIM" "$text" "$C_RESET"
+  fi
 }
 
-# step_line <state> <glyph> <message> — final, permanent line of a step
+# step_line <state> <glyph> <message> — final state of a step, drawn in place
 step_line() {
   local state=$1 glyph=$2 message=$3
   local color="$C_GREEN"
@@ -73,13 +144,12 @@ step_line() {
     warn) color="$C_YELLOW" ;;
     failed) color="$C_RED" ;;
   esac
-  draw_bar "$((STEP * 100 / TOTAL_STEPS))" "$color$glyph$C_RESET" "$message" 0
-  printf '\n'
+  draw_bar "$((STEP * 100 / TOTAL_STEPS))" "$color$glyph$C_RESET" "$message"
 }
 
-info()  { printf '%s %s%s%s\n' "$C_DIM" "$C_BLUE" "$1" "$C_RESET"; }
-warn()  { printf '%s %s[!]%s %s\n' "$C_DIM" "$C_YELLOW" "$C_RESET" "$1" >&2; }
-error() { printf '%s %s[✗]%s %s\n' "$C_BOLD" "$C_RED" "$C_RESET" "$1" >&2; }
+info()  { progress_clear; printf '%s %s%s%s\n' "$C_DIM" "$C_BLUE" "$1" "$C_RESET"; }
+warn()  { progress_clear; printf '%s %s[!]%s %s\n' "$C_DIM" "$C_YELLOW" "$C_RESET" "$1" >&2; }
+error() { progress_clear; printf '%s %s[✗]%s %s\n' "$C_BOLD" "$C_RED" "$C_RESET" "$1" >&2; }
 die()   { error "$1"; exit "${2:-1}"; }
 
 print_header() {
@@ -97,16 +167,21 @@ run_step() {
   : >"$LOG_FILE"
   "$@" >>"$LOG_FILE" 2>&1 &
   local pid=$!
-  while kill -0 "$pid" 2>/dev/null; do
-    draw_bar "$((STEP * 100 / TOTAL_STEPS))" "${SPIN[$((spin % ${#SPIN[@]}))]}" "$message ..." "$spin"
-    spin=$((spin + 1))
-    sleep 0.1
-  done
+  # Only animate on a terminal; redirected output would otherwise turn every
+  # spinner frame into a separate log line.
+  if ((INTERACTIVE)); then
+    while kill -0 "$pid" 2>/dev/null; do
+      draw_bar "$((STEP * 100 / TOTAL_STEPS))" "${SPIN[$((spin % ${#SPIN[@]}))]}" "$message ..."
+      spin=$((spin + 1))
+      sleep 0.1
+    done
+  fi
   local rc=0
   wait "$pid" || rc=$?
   if ((rc != 0)); then
     step_line failed "$GLYPH_ERR" "$message"
-    printf '\n%s%s last output %s\n' "$C_DIM" "$C_YELLOW" "$C_RESET" >&2
+    progress_finish
+    printf '%s%s last output %s\n' "$C_DIM" "$C_YELLOW" "$C_RESET" >&2
     tail -n 12 "$LOG_FILE" | sed 's/^/    /' >&2
     die "$message failed (see output above)"
   fi
@@ -279,7 +354,7 @@ step_go_toolchain() {
   if have go; then
     version="$(go_version_of go)"
     if [[ -n "$version" ]] && version_ge "$version" "$MIN_GO_VERSION"; then
-      skip_step "Go toolchain (go${version}) already present"
+      skip_step "Go ${version} already present"
       return 0
     fi
     warn "found go${version:-unknown}, ${MIN_GO_VERSION} or newer is required"
@@ -288,7 +363,7 @@ step_go_toolchain() {
     if [[ -n "$version" ]] && version_ge "$version" "$MIN_GO_VERSION"; then
       ln -sf /usr/local/go/bin/go /usr/local/bin/go
       ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
-      skip_step "Go toolchain (go${version}) already present in /usr/local/go"
+      skip_step "Go ${version} already installed"
       return 0
     fi
   fi
@@ -492,20 +567,21 @@ main() {
   fi
 
   if [[ "$BUILD_NEEDED" -eq 0 ]]; then
-    skip_step "Building rdpshot (sources unchanged)"
-    skip_step "Installing to ${INSTALL_PREFIX} (already up to date)"
+    skip_step "Build (sources unchanged)"
+    skip_step "Install up to date"
   else
     run_step "Building rdpshot (${VERSION_TAG})" do_build
     run_step "Installing to ${INSTALL_PREFIX}" do_install
   fi
 
   if [[ "$SKIP_CAPTURE" -eq 1 ]]; then
-    skip_step "Screenshot capture tools (skipped by request)"
+    skip_step "Capture tools not requested"
   else
     run_step "Installing optional capture tools" install_capture_tools
   fi
 
   run_step "Verifying installation" verify_install
+  progress_finish
 
   printf '\n%s %srdpshot is ready%s\n' "$C_BOLD" "$C_GREEN" "$C_RESET"
   printf '   %-14s %s\n' "binary" "$BIN_LINK_DIR/rdpshot"

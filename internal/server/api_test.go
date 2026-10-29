@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -455,7 +457,7 @@ func TestCancelScan(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	env.server.runsMu.Lock()
-	env.server.runs["scan-live00000000001"] = cancel
+	env.server.runs["scan-live00000000001"] = &scanRun{cancel: cancel}
 	env.server.runsMu.Unlock()
 
 	resp = postForm(t, env.http.URL+"/api/v1/scans/scan-live00000000001/cancel", nil)
@@ -562,4 +564,187 @@ func TestServesStaticAndScreenshotFiles(t *testing.T) {
 			t.Fatalf("path traversal %s served database content", path)
 		}
 	}
+}
+
+func TestRenameAndDeleteScan(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	seededScan(t, env.store, "scan-rename000000001", model.ScanCompleted)
+
+	req, err := http.NewRequest(http.MethodPatch, env.http.URL+"/api/v1/scans/scan-rename000000001",
+		strings.NewReader(`{"name":"quarterly audit"}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rename status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	var renamed model.Scan
+	if err := json.NewDecoder(resp.Body).Decode(&renamed); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode rename: %v", err)
+	}
+	resp.Body.Close()
+	if renamed.Name != "quarterly audit" {
+		t.Fatalf("renamed name = %q", renamed.Name)
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, env.http.URL+"/api/v1/scans/scan-rename000000001", nil)
+	if err != nil {
+		t.Fatalf("new delete: %v", err)
+	}
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if delResp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d, body: %s", delResp.StatusCode, readBody(t, delResp))
+	}
+	delResp.Body.Close()
+
+	getResp := get(t, env.http.URL+"/api/v1/scans/scan-rename000000001")
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get deleted status = %d, want 404", getResp.StatusCode)
+	}
+	getResp.Body.Close()
+}
+
+func TestPauseResumeScan(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	seededScan(t, env.store, "scan-pause0000000001", model.ScanRunning)
+
+	control := scanner.NewRunControl(func(status model.ScanStatus, progress model.Progress) {
+		env.server.persistScanState("scan-pause0000000001", status, progress)
+	})
+	env.server.runsMu.Lock()
+	env.server.runs["scan-pause0000000001"] = &scanRun{
+		cancel:  func() {},
+		control: control,
+	}
+	env.server.runsMu.Unlock()
+
+	resp := postForm(t, env.http.URL+"/api/v1/scans/scan-pause0000000001/pause", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("pause status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	resp.Body.Close()
+
+	scan, err := env.store.GetScan("scan-pause0000000001")
+	if err != nil {
+		t.Fatalf("get after pause: %v", err)
+	}
+	if scan.Status != model.ScanPaused {
+		t.Fatalf("status after pause = %q", scan.Status)
+	}
+
+	resp = postForm(t, env.http.URL+"/api/v1/scans/scan-pause0000000001/resume", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("resume status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	resp.Body.Close()
+
+	scan, err = env.store.GetScan("scan-pause0000000001")
+	if err != nil {
+		t.Fatalf("get after resume: %v", err)
+	}
+	if scan.Status != model.ScanRunning {
+		t.Fatalf("status after resume = %q", scan.Status)
+	}
+}
+
+func TestAnalyticsEndpoint(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	resp := get(t, env.http.URL+"/api/v1/analytics")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("analytics status = %d", resp.StatusCode)
+	}
+	var a model.Analytics
+	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode analytics: %v", err)
+	}
+	resp.Body.Close()
+}
+
+func TestWordlistSettingsRoundTrip(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	dir := t.TempDir()
+	userPath := filepath.Join(dir, "users.txt")
+	passPath := filepath.Join(dir, "passwords.txt")
+	if err := os.WriteFile(userPath, []byte("admin\n"), 0o600); err != nil {
+		t.Fatalf("write users: %v", err)
+	}
+	if err := os.WriteFile(passPath, []byte("Password1!\n"), 0o600); err != nil {
+		t.Fatalf("write passwords: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, env.http.URL+"/api/v1/settings/wordlists",
+		strings.NewReader(`{"user_wordlist":`+strconv.Quote(userPath)+`,"password_wordlist":`+strconv.Quote(passPath)+`}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	resp.Body.Close()
+
+	getResp := get(t, env.http.URL+"/api/v1/settings/wordlists")
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("get status = %d", getResp.StatusCode)
+	}
+	var settings wordlistSettings
+	if err := json.NewDecoder(getResp.Body).Decode(&settings); err != nil {
+		getResp.Body.Close()
+		t.Fatalf("decode: %v", err)
+	}
+	getResp.Body.Close()
+	if settings.UserWordlist != userPath || settings.PasswordWordlist != passPath {
+		t.Fatalf("settings = %+v", settings)
+	}
+}
+
+func TestCreateScanAcceptsTargetsFile(t *testing.T) {
+	env := newTestEnv(t, Config{OutputsDir: t.TempDir()})
+	port := closedPort(t)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("ack_authorized", "true")
+	_ = writer.WriteField("enable_vuln", "true")
+	_ = writer.WriteField("concurrency", "2")
+	_ = writer.WriteField("rate", "100")
+	_ = writer.WriteField("timeout", "200ms")
+	part, err := writer.CreateFormFile("targets_file", "targets.txt")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte("# comment\n127.0.0.1:" + strconv.Itoa(port) + "\n\n")); err != nil {
+		t.Fatalf("write targets: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, env.http.URL+"/api/v1/scans", &body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	resp.Body.Close()
 }

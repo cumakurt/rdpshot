@@ -59,12 +59,27 @@ func New(deps Dependencies) *Engine {
 
 // Run executes one scan to completion (or cancellation) and persists results.
 func (e *Engine) Run(ctx context.Context, scan *model.Scan, endpoints []model.Endpoint) {
+	e.RunWithControl(ctx, scan, endpoints, nil)
+}
+
+// RunWithControl executes one scan with pause/resume support. A nil control is
+// equivalent to Run. The control must not be reused for another scan.
+func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints []model.Endpoint, control *RunControl) {
 	logger := e.deps.Logger.With("scan_id", scan.ID)
 	now := time.Now().UTC()
 	scan.Status = model.ScanRunning
 	scan.StartedAt = &now
 	scan.Progress = model.Progress{Total: int64(len(endpoints))}
 	e.persistScan(*scan)
+
+	if control == nil {
+		control = NewRunControl(nil)
+	}
+	control.attach(&scan.Progress, func(eventType model.EventType, progress model.Progress) {
+		e.publish(model.Event{Type: eventType, ScanID: scan.ID, At: time.Now().UTC(), Payload: progress})
+	})
+	defer control.finish()
+
 	e.publish(model.Event{Type: model.EventScanStarted, ScanID: scan.ID, At: now, Payload: scan.Progress})
 
 	var candidates []model.Credential
@@ -105,6 +120,12 @@ func (e *Engine) Run(ctx context.Context, scan *model.Scan, endpoints []model.En
 			defer wg.Done()
 			for ep := range jobs {
 				if ctx.Err() != nil {
+					atomic.AddInt64(&progress.Done, 1)
+					continue
+				}
+				// A paused scan keeps its workers parked here so the remaining
+				// endpoints stay queued instead of being probed or dropped.
+				if err := control.wait(ctx); err != nil {
 					atomic.AddInt64(&progress.Done, 1)
 					continue
 				}

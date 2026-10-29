@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +23,7 @@ import (
 var ErrScanNotFound = errors.New("store: scan not found")
 
 // schemaVersion is the current on-disk schema revision.
-const schemaVersion = 1
+const schemaVersion = 3
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS scans (
@@ -33,7 +35,10 @@ CREATE TABLE IF NOT EXISTS scans (
   finished_at TEXT,
   options_json TEXT NOT NULL,
   progress_json TEXT NOT NULL,
-  error TEXT
+  error TEXT,
+  engagement TEXT NOT NULL DEFAULT '',
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  schedule_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS hosts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +64,10 @@ CREATE TABLE IF NOT EXISTS findings (
   cve TEXT,
   evidence TEXT,
   remediation TEXT,
-  detected_at TEXT NOT NULL
+  detected_at TEXT NOT NULL,
+  triage_status TEXT NOT NULL DEFAULT 'open',
+  triage_note TEXT NOT NULL DEFAULT '',
+  triage_updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS credentials (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,10 +93,58 @@ CREATE TABLE IF NOT EXISTS screenshots (
   height INTEGER,
   captured_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS schedules (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  interval_seconds INTEGER NOT NULL DEFAULT 0,
+  cron_expr TEXT NOT NULL DEFAULT '',
+  options_json TEXT NOT NULL,
+  notify_webhook TEXT NOT NULL DEFAULT '',
+  notify_on_complete INTEGER NOT NULL DEFAULT 0,
+  notify_on_critical INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_run_at TEXT,
+  next_run_at TEXT,
+  last_scan_id TEXT,
+  last_error TEXT
+);
+CREATE TABLE IF NOT EXISTS wordlist_sets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  user_path TEXT NOT NULL,
+  password_path TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  remote_ip TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id, severity);
 CREATE INDEX IF NOT EXISTS idx_hosts_scan ON hosts(scan_id);
 CREATE INDEX IF NOT EXISTS idx_credentials_scan ON credentials(scan_id);
 CREATE INDEX IF NOT EXISTS idx_screenshots_scan ON screenshots(scan_id);
+CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
 `
 
 // Store is the persistence layer.
@@ -136,10 +192,79 @@ func (s *Store) migrate() error {
 	if current > schemaVersion {
 		return fmt.Errorf("store: database schema %d is newer than supported %d", current, schemaVersion)
 	}
+	// Always ensure v3 columns exist. CREATE TABLE IF NOT EXISTS leaves older
+	// table shapes unchanged, and indexes that reference new columns must run
+	// only after the ALTER TABLE steps below.
+	if err := s.migrateToV3(); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("store: update schema version: %w", err)
 	}
 	return nil
+}
+
+// migrateToV3 adds engagement/triage/notification columns to databases created
+// under schema v2 whose CREATE TABLE IF NOT EXISTS left the old shape intact.
+func (s *Store) migrateToV3() error {
+	alters := []struct {
+		table, column, decl string
+	}{
+		{"scans", "engagement", "TEXT NOT NULL DEFAULT ''"},
+		{"scans", "tags_json", "TEXT NOT NULL DEFAULT '[]'"},
+		{"scans", "schedule_id", "TEXT NOT NULL DEFAULT ''"},
+		{"findings", "triage_status", "TEXT NOT NULL DEFAULT 'open'"},
+		{"findings", "triage_note", "TEXT NOT NULL DEFAULT ''"},
+		{"findings", "triage_updated_at", "TEXT"},
+		{"schedules", "cron_expr", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "notify_webhook", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "notify_on_complete", "INTEGER NOT NULL DEFAULT 0"},
+		{"schedules", "notify_on_critical", "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, a := range alters {
+		ok, err := s.hasColumn(a.table, a.column)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.column, a.decl)
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("store: migrate v3 %s.%s: %w", a.table, a.column, err)
+		}
+	}
+	// Indexes that depend on columns added above.
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_findings_triage ON findings(scan_id, triage_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_scans_engagement ON scans(engagement)`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("store: migrate v3 index: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) hasColumn(table, column string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, fmt.Errorf("store: table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, fmt.Errorf("store: table_info scan %s: %w", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close releases the database handle.
@@ -193,12 +318,18 @@ func (s *Store) CreateScan(sc model.Scan) error {
 	if err != nil {
 		return fmt.Errorf("store: encode scan progress: %w", err)
 	}
+	tags, err := json.Marshal(normalizeTags(sc.Tags))
+	if err != nil {
+		return fmt.Errorf("store: encode scan tags: %w", err)
+	}
 	_, err = s.db.Exec(
-		`INSERT INTO scans (id, name, status, created_at, started_at, finished_at, options_json, progress_json, error)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO scans (id, name, status, created_at, started_at, finished_at, options_json, progress_json, error,
+		 engagement, tags_json, schedule_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sc.ID, sc.Name, string(sc.Status), formatTime(sc.CreatedAt),
 		formatTimePtr(sc.StartedAt), formatTimePtr(sc.FinishedAt),
 		string(options), string(progress), sc.Error,
+		strings.TrimSpace(sc.Engagement), string(tags), strings.TrimSpace(sc.ScheduleID),
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert scan %q: %w", sc.ID, err)
@@ -216,11 +347,17 @@ func (s *Store) UpdateScan(sc model.Scan) error {
 	if err != nil {
 		return fmt.Errorf("store: encode scan progress: %w", err)
 	}
+	tags, err := json.Marshal(normalizeTags(sc.Tags))
+	if err != nil {
+		return fmt.Errorf("store: encode scan tags: %w", err)
+	}
 	res, err := s.db.Exec(
 		`UPDATE scans SET name = ?, status = ?, started_at = ?, finished_at = ?,
-		 options_json = ?, progress_json = ?, error = ? WHERE id = ?`,
+		 options_json = ?, progress_json = ?, error = ?, engagement = ?, tags_json = ?, schedule_id = ?
+		 WHERE id = ?`,
 		sc.Name, string(sc.Status), formatTimePtr(sc.StartedAt), formatTimePtr(sc.FinishedAt),
-		string(options), string(progress), sc.Error, sc.ID,
+		string(options), string(progress), sc.Error,
+		strings.TrimSpace(sc.Engagement), string(tags), strings.TrimSpace(sc.ScheduleID), sc.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("store: update scan %q: %w", sc.ID, err)
@@ -238,9 +375,58 @@ func (s *Store) UpdateScan(sc model.Scan) error {
 // GetScan loads one scan by id.
 func (s *Store) GetScan(id string) (model.Scan, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, status, created_at, started_at, finished_at, options_json, progress_json, error
+		`SELECT id, name, status, created_at, started_at, finished_at, options_json, progress_json, error,
+		        engagement, tags_json, schedule_id
 		 FROM scans WHERE id = ?`, id)
 	return scanFromRow(row)
+}
+
+// RenameScan updates the display name of an existing scan.
+func (s *Store) RenameScan(id, name string) error {
+	res, err := s.db.Exec(`UPDATE scans SET name = ? WHERE id = ?`, name, id)
+	if err != nil {
+		return fmt.Errorf("store: rename scan %q: %w", id, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: rename scan %q: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: rename scan %q: %w", id, ErrScanNotFound)
+	}
+	return nil
+}
+
+// DeleteScan removes a scan together with its hosts, findings, credentials and
+// screenshot metadata. The deletes run in one transaction so a partial failure
+// never leaves orphaned child rows behind.
+func (s *Store) DeleteScan(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin delete scan %q: %w", id, err)
+	}
+	defer tx.Rollback()
+
+	for _, table := range []string{"findings", "credentials", "screenshots", "hosts"} {
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE scan_id = ?`, id); err != nil {
+			return fmt.Errorf("store: delete scan %q: clear %s: %w", id, table, err)
+		}
+	}
+	res, err := tx.Exec(`DELETE FROM scans WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete scan %q: %w", id, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete scan %q: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: delete scan %q: %w", id, ErrScanNotFound)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit delete scan %q: %w", id, err)
+	}
+	return nil
 }
 
 // ListScans returns the most recent scans, newest first.
@@ -248,9 +434,21 @@ func (s *Store) ListScans(limit int) ([]model.Scan, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.db.Query(
-		`SELECT id, name, status, created_at, started_at, finished_at, options_json, progress_json, error
-		 FROM scans ORDER BY created_at DESC LIMIT ?`, limit)
+	return s.listScans(limit)
+}
+
+// listScans returns scans newest first. A non-positive limit returns every
+// scan, which the cross-scan analytics need.
+func (s *Store) listScans(limit int) ([]model.Scan, error) {
+	query := `SELECT id, name, status, created_at, started_at, finished_at, options_json, progress_json, error,
+		 engagement, tags_json, schedule_id
+		 FROM scans ORDER BY created_at DESC`
+	var args []any
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list scans: %w", err)
 	}
@@ -283,9 +481,12 @@ func scanFromRow(row rowScanner) (model.Scan, error) {
 		options    string
 		progress   string
 		errText    sql.NullString
+		engagement string
+		tagsJSON   string
+		scheduleID string
 	)
 	err := row.Scan(&sc.ID, &sc.Name, &status, &createdAt, &startedAt, &finishedAt,
-		&options, &progress, &errText)
+		&options, &progress, &errText, &engagement, &tagsJSON, &scheduleID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Scan{}, fmt.Errorf("store: %w", ErrScanNotFound)
 	}
@@ -297,6 +498,14 @@ func scanFromRow(row rowScanner) (model.Scan, error) {
 	sc.StartedAt = parseTimePtr(startedAt.String)
 	sc.FinishedAt = parseTimePtr(finishedAt.String)
 	sc.Error = errText.String
+	sc.Engagement = engagement
+	sc.ScheduleID = scheduleID
+	if tagsJSON == "" {
+		tagsJSON = "[]"
+	}
+	if err := json.Unmarshal([]byte(tagsJSON), &sc.Tags); err != nil {
+		return model.Scan{}, fmt.Errorf("store: decode scan tags: %w", err)
+	}
 	if err := json.Unmarshal([]byte(options), &sc.Options); err != nil {
 		return model.Scan{}, fmt.Errorf("store: decode scan options: %w", err)
 	}
@@ -304,6 +513,27 @@ func scanFromRow(row rowScanner) (model.Scan, error) {
 		return model.Scan{}, fmt.Errorf("store: decode scan progress: %w", err)
 	}
 	return sc, nil
+}
+
+func normalizeTags(tags []string) []string {
+	if len(tags) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		key := strings.ToLower(tag)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
 }
 
 // UpsertHost inserts or updates a host row and returns its id.
@@ -386,12 +616,17 @@ func (s *Store) ListHosts(scanID string) ([]model.Host, error) {
 
 // InsertFinding stores one finding and returns its id.
 func (s *Store) InsertFinding(f model.Finding) (int64, error) {
+	triage := f.TriageStatus
+	if triage == "" {
+		triage = model.TriageOpen
+	}
 	res, err := s.db.Exec(
 		`INSERT INTO findings (scan_id, host_id, address, port, check_id, title, severity, status,
-		 cvss, cve, evidence, remediation, detected_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 cvss, cve, evidence, remediation, detected_at, triage_status, triage_note, triage_updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ScanID, f.HostID, f.Address, int(f.Port), f.CheckID, f.Title, string(f.Severity),
 		string(f.Status), f.CVSS, f.CVE, f.Evidence, f.Remediation, formatTime(f.DetectedAt),
+		string(triage), f.TriageNote, formatTimePtr(f.TriageUpdatedAt),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: insert finding %q: %w", f.CheckID, err)
@@ -403,7 +638,8 @@ func (s *Store) InsertFinding(f model.Finding) (int64, error) {
 func (s *Store) ListFindings(scanID string) ([]model.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT id, scan_id, host_id, address, port, check_id, title, severity, status,
-		        cvss, cve, evidence, remediation, detected_at
+		        cvss, cve, evidence, remediation, detected_at,
+		        triage_status, triage_note, triage_updated_at
 		 FROM findings WHERE scan_id = ?
 		 ORDER BY CASE severity
 		   WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3
@@ -414,27 +650,10 @@ func (s *Store) ListFindings(scanID string) ([]model.Finding, error) {
 	defer rows.Close()
 	var findings []model.Finding
 	for rows.Next() {
-		var (
-			f           model.Finding
-			port        int
-			severity    string
-			status      string
-			cve         sql.NullString
-			evidence    sql.NullString
-			remediation sql.NullString
-			detectedAt  string
-		)
-		if err := rows.Scan(&f.ID, &f.ScanID, &f.HostID, &f.Address, &port, &f.CheckID, &f.Title,
-			&severity, &status, &f.CVSS, &cve, &evidence, &remediation, &detectedAt); err != nil {
-			return nil, fmt.Errorf("store: read finding: %w", err)
+		f, err := findingFromRow(rows)
+		if err != nil {
+			return nil, err
 		}
-		f.Port = uint16(port)
-		f.Severity = model.Severity(severity)
-		f.Status = model.FindingStatus(status)
-		f.CVE = cve.String
-		f.Evidence = evidence.String
-		f.Remediation = remediation.String
-		f.DetectedAt = parseTime(detectedAt)
 		findings = append(findings, f)
 	}
 	if err := rows.Err(); err != nil {
@@ -668,4 +887,238 @@ func andWhere(where, condition string) string {
 		return " WHERE " + condition
 	}
 	return where + " AND " + condition
+}
+
+// topRiskHostsLimit bounds the highest-risk host ranking on the reports page.
+const topRiskHostsLimit = 10
+
+// tlsExposureLabels fixes the display order of the TLS posture distribution.
+var tlsExposureLabels = []string{
+	"TLS 1.3",
+	"TLS 1.2",
+	"TLS 1.1",
+	"TLS 1.0",
+	"SSL 3.0",
+	"RDP Security (no TLS)",
+	"Not probed",
+}
+
+// legacyTLSVersions lists protocol versions that no longer meet current
+// hardening baselines. The standard RDP security layer (empty version) is
+// treated as legacy as well.
+var legacyTLSVersions = map[string]bool{
+	"TLS 1.0": true,
+	"TLS 1.1": true,
+	"SSL 3.0": true,
+	"SSLv3":   true,
+}
+
+// statusOrder fixes the display order of finding status counts.
+var statusOrder = []string{
+	string(model.FindingVulnerable),
+	string(model.FindingPotential),
+	string(model.FindingInconclusive),
+	string(model.FindingNotVulnerable),
+}
+
+// hostAgg accumulates the observations of one endpoint while Analytics walks
+// every scan. Hosts are deduplicated so repeated scans do not inflate posture
+// numbers; the newest scan wins because scans are listed newest first.
+type hostAgg struct {
+	risk         model.HostRisk
+	serviceKnown bool
+	certKnown    bool
+}
+
+// Analytics aggregates posture statistics across every stored scan.
+func (s *Store) Analytics() (model.Analytics, error) {
+	scans, err := s.listScans(0)
+	if err != nil {
+		return model.Analytics{}, err
+	}
+
+	var a model.Analytics
+	hosts := map[string]*hostAgg{}
+	hostOrder := []string{}
+	seenFindings := map[string]bool{}
+	statusCounts := map[string]int64{}
+	tlsCounts := map[string]int64{}
+	osCounts := map[string]int64{}
+	var cvssSum float64
+	var cvssCount int64
+
+	for _, sc := range scans {
+		scanHosts, err := s.ListHosts(sc.ID)
+		if err != nil {
+			return model.Analytics{}, err
+		}
+		for _, h := range scanHosts {
+			key := h.Endpoint.Key()
+			if _, ok := hosts[key]; ok {
+				continue
+			}
+			agg := &hostAgg{
+				risk: model.HostRisk{
+					Address: h.Endpoint.Address,
+					Port:    h.Endpoint.Port,
+					Open:    h.State == "open",
+				},
+			}
+			if h.Service != nil {
+				agg.serviceKnown = true
+				agg.risk.NLARequired = h.Service.NLARequired
+				agg.risk.TLSVersion = h.Service.TLSVersion
+				agg.risk.OSGuess = h.Service.OSGuess
+				if h.Service.Certificate != nil {
+					agg.certKnown = true
+					agg.risk.SelfSigned = h.Service.Certificate.SelfSigned
+				}
+			}
+			hosts[key] = agg
+			hostOrder = append(hostOrder, key)
+		}
+
+		findings, err := s.ListFindings(sc.ID)
+		if err != nil {
+			return model.Analytics{}, err
+		}
+		for _, f := range findings {
+			key := f.Address + ":" + strconv.Itoa(int(f.Port)) + "|" + f.CheckID
+			if seenFindings[key] {
+				continue
+			}
+			seenFindings[key] = true
+			statusCounts[string(f.Status)]++
+			if f.Severity == model.SeverityCritical {
+				a.CriticalFindings++
+			}
+			if f.CVSS > 0 {
+				cvssSum += f.CVSS
+				cvssCount++
+			}
+
+			hostKey := f.Address + ":" + strconv.Itoa(int(f.Port))
+			agg, ok := hosts[hostKey]
+			if !ok {
+				// Findings normally reference a stored host; synthesise an
+				// entry rather than dropping the finding if one is missing.
+				agg = &hostAgg{risk: model.HostRisk{Address: f.Address, Port: f.Port}}
+				hosts[hostKey] = agg
+				hostOrder = append(hostOrder, hostKey)
+			}
+			agg.risk.Findings++
+			agg.risk.RiskScore += f.CVSS
+			if f.Severity.Rank() > agg.risk.MaxSeverity.Rank() {
+				agg.risk.MaxSeverity = f.Severity
+			}
+		}
+	}
+
+	for _, key := range hostOrder {
+		agg := hosts[key]
+		a.HostsScanned++
+		if !agg.risk.Open {
+			continue
+		}
+		a.HostsOpen++
+
+		osLabel := agg.risk.OSGuess
+		if osLabel == "" {
+			osLabel = "Unknown"
+		}
+		osCounts[osLabel]++
+
+		if !agg.serviceKnown {
+			tlsCounts["Not probed"]++
+			continue
+		}
+		tlsLabel := agg.risk.TLSVersion
+		if tlsLabel == "" {
+			tlsLabel = "RDP Security (no TLS)"
+		}
+		tlsCounts[tlsLabel]++
+		if agg.risk.TLSVersion == "" || legacyTLSVersions[agg.risk.TLSVersion] {
+			a.LegacyTLS++
+		}
+		if !agg.risk.NLARequired {
+			a.NLAMissing++
+		}
+		if agg.certKnown && agg.risk.SelfSigned {
+			a.SelfSigned++
+		}
+	}
+
+	if cvssCount > 0 {
+		a.AvgCVSS = cvssSum / float64(cvssCount)
+	}
+
+	a.Exposure = orderedCounts(tlsCounts, tlsExposureLabels)
+	a.OSTypes = topCounts(osCounts, 8)
+	a.Statuses = orderedCounts(statusCounts, statusOrder)
+
+	for _, key := range hostOrder {
+		risk := hosts[key].risk
+		if risk.Findings == 0 {
+			continue
+		}
+		a.TopHosts = append(a.TopHosts, risk)
+	}
+	sort.Slice(a.TopHosts, func(i, j int) bool {
+		if a.TopHosts[i].RiskScore != a.TopHosts[j].RiskScore {
+			return a.TopHosts[i].RiskScore > a.TopHosts[j].RiskScore
+		}
+		if a.TopHosts[i].Findings != a.TopHosts[j].Findings {
+			return a.TopHosts[i].Findings > a.TopHosts[j].Findings
+		}
+		if a.TopHosts[i].Address != a.TopHosts[j].Address {
+			return a.TopHosts[i].Address < a.TopHosts[j].Address
+		}
+		return a.TopHosts[i].Port < a.TopHosts[j].Port
+	})
+	if len(a.TopHosts) > topRiskHostsLimit {
+		a.TopHosts = a.TopHosts[:topRiskHostsLimit]
+	}
+	return a, nil
+}
+
+// orderedCounts renders a counter map in the supplied label order. Labels that
+// are not part of the order are appended alphabetically after the known ones.
+func orderedCounts(counts map[string]int64, order []string) []model.LabeledCount {
+	out := make([]model.LabeledCount, 0, len(counts))
+	seen := make(map[string]bool, len(order))
+	for _, label := range order {
+		seen[label] = true
+		if count, ok := counts[label]; ok {
+			out = append(out, model.LabeledCount{Label: label, Count: count})
+		}
+	}
+	extra := make([]string, 0, len(counts))
+	for label := range counts {
+		if !seen[label] {
+			extra = append(extra, label)
+		}
+	}
+	sort.Strings(extra)
+	for _, label := range extra {
+		out = append(out, model.LabeledCount{Label: label, Count: counts[label]})
+	}
+	return out
+}
+
+// topCounts renders the highest-count buckets, breaking ties by label.
+func topCounts(counts map[string]int64, limit int) []model.LabeledCount {
+	out := make([]model.LabeledCount, 0, len(counts))
+	for label, count := range counts {
+		out = append(out, model.LabeledCount{Label: label, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Label < out[j].Label
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }

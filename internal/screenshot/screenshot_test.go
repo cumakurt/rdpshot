@@ -145,3 +145,42 @@ func TestAvailableMissingCaptureTool(t *testing.T) {
 		t.Fatalf("err = %v, want ErrGrabberUnavailable", err)
 	}
 }
+
+func TestEvidenceGrabWritesPNG(t *testing.T) {
+	dir := t.TempDir()
+	grabber := NewEvidenceGrabber(dir)
+	shot, err := grabber.Grab(context.Background(),
+		model.Endpoint{Address: "10.0.0.9", Port: 3389},
+		model.Credential{Username: "Administrator", Domain: "LAB", Method: "credssp", Secret: "x"})
+	if err != nil {
+		t.Fatalf("grab: %v", err)
+	}
+	if shot.Width != evidenceWidth || shot.Height != evidenceHeight {
+		t.Fatalf("dimensions = %dx%d", shot.Width, shot.Height)
+	}
+	info, err := os.Stat(shot.FilePath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Size() < 100 {
+		t.Fatalf("evidence image too small: %d", info.Size())
+	}
+}
+
+func TestAutoGrabberFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	auto := NewAutoGrabber(dir, nil)
+	auto.Primary = NewXFreeRDPGrabber(dir)
+	auto.Primary.(*XFreeRDPGrabber).lookPath = func(string) (string, error) {
+		return "", errors.New("missing")
+	}
+	shot, err := auto.Grab(context.Background(),
+		model.Endpoint{Address: "10.0.0.9", Port: 3389},
+		model.Credential{Username: "u", Secret: "p"})
+	if err != nil {
+		t.Fatalf("grab: %v", err)
+	}
+	if filepath.Dir(shot.FilePath) != dir {
+		t.Fatalf("path = %s", shot.FilePath)
+	}
+}

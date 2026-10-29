@@ -1,84 +1,75 @@
 {{ define "gallery" }}
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     {{ template "head" . }}
   </head>
-  <body class="min-h-screen bg-slate-950 text-slate-200 antialiased">
+  <body class="antialiased">
     {{ template "nav" . }}
-    <main x-data="{ open: false }" class="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-      <section class="flex flex-wrap items-end justify-between gap-4">
+    <main class="page-main">
+      <section class="page-head">
         <div>
-          <h1 class="text-2xl font-bold tracking-tight text-white">Visual Session Vault</h1>
-          <p class="mt-1 text-sm text-slate-400">Screenshots captured from authenticated RDP sessions.</p>
+          <p class="page-eyebrow">Evidence</p>
+          <h1 class="page-title mt-1">Visual Session Vault</h1>
+          <p class="page-subtitle">Screenshots captured from authenticated RDP sessions.</p>
         </div>
         <div class="w-full max-w-md">
-          <label for="gallery-search" class="mb-1 block text-xs font-medium text-slate-300">Search sessions</label>
+          <label for="gallery-search" class="label">Search sessions</label>
           <input id="gallery-search" type="search" data-gallery-search
             placeholder="Filter by IP address or username&hellip;"
-            class="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500">
-          <p id="gallery-count" class="mt-1 text-xs text-slate-500">{{ len .Items }} sessions captured</p>
+            class="input">
+          <p id="gallery-count" class="mt-1 text-xs text-subtle">{{ len .Items }} sessions captured</p>
         </div>
       </section>
 
       {{ if .Items }}
       <section class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="Session screenshots">
         {{ range .Items }}
-        <figure class="card group overflow-hidden" data-gallery-item data-address="{{ .Address }}" data-username="{{ .Username }}">
-          <div class="relative aspect-video overflow-hidden bg-slate-950">
+        <figure class="gallery-card" data-gallery-item data-address="{{ .Address }}" data-username="{{ .Username }}">
+          <div class="gallery-thumb">
             <img src="{{ .FilePath }}"
               alt="RDP session screenshot captured from {{ .Address }}:{{ .Port }}"
-              loading="lazy"
-              class="h-full w-full object-cover transition duration-300 group-hover:scale-105">
-            <div class="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-slate-950/95 to-transparent p-3 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-              <button type="button"
-                class="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-400 active:scale-95"
-                @click="open = true; $refs.fullImage.src = $event.currentTarget.dataset.fullSrc; $refs.fullImage.alt = $event.currentTarget.dataset.alt"
+              loading="lazy">
+            <div class="gallery-overlay">
+              <button type="button" class="btn btn-primary btn-sm" data-lightbox-open
                 data-full-src="{{ .FilePath }}"
                 data-alt="RDP session screenshot captured from {{ .Address }}:{{ .Port }}">
                 View Fullscreen
               </button>
-              <span class="font-mono text-xs text-slate-300">{{ .Width }}x{{ .Height }}</span>
+              <span class="gallery-dim">{{ .Width }}x{{ .Height }}</span>
             </div>
           </div>
-          <figcaption class="space-y-1 p-4">
-            <p class="font-mono text-sm text-white">{{ .Address }}:{{ .Port }}</p>
-            <p class="text-xs text-slate-400">user: <span class="text-slate-200">{{ .Username }}</span></p>
-            <p class="text-xs text-slate-500">{{ .CapturedAt.Format "2006-01-02 15:04:05" }}</p>
+          <figcaption class="gallery-caption">
+            <p class="gallery-title">{{ .Address }}:{{ .Port }}</p>
+            <p class="gallery-meta">user: <span class="text-strong">{{ .Username }}</span></p>
+            <p class="gallery-note">{{ .CapturedAt.Format "2006-01-02 15:04:05" }}</p>
           </figcaption>
         </figure>
         {{ end }}
       </section>
-      <p id="gallery-no-match" class="hidden text-center text-sm text-slate-500">
+      <p id="gallery-no-match" class="hidden text-center text-sm text-subtle">
         No sessions match your filter.
       </p>
       {{ else }}
-      <section class="card p-12 text-center">
-        <svg class="mx-auto h-10 w-10 text-slate-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-          <rect x="3" y="7" width="18" height="13" rx="2"></rect>
-          <path d="M8 7l1.5-2.5h5L16 7"></path>
-          <circle cx="12" cy="13.5" r="3"></circle>
-        </svg>
-        <p class="mt-4 text-sm text-slate-400">No session screenshots captured yet</p>
-        <a href="/" class="mt-4 inline-block rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-indigo-500/40 hover:text-indigo-400 active:scale-95">
-          Start a scan with screenshots enabled
-        </a>
+      <section class="card">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <rect x="3" y="7" width="18" height="13" rx="2"></rect>
+            <path d="M8 7l1.5-2.5h5L16 7"></path>
+            <circle cx="12" cy="13.5" r="3"></circle>
+          </svg>
+          <p>No session screenshots captured yet</p>
+          <a href="/" class="btn btn-ghost btn-sm">Start a scan with screenshots enabled</a>
+        </div>
       </section>
       {{ end }}
 
-      <div x-show="open" x-cloak
-        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 p-4"
-        role="dialog" aria-modal="true" aria-label="Fullscreen session screenshot"
-        @keydown.escape.window="open = false">
-        <button type="button" class="absolute inset-0 cursor-default" aria-label="Close fullscreen preview" @click="open = false"></button>
-        <figure class="relative z-10 max-w-5xl">
-          <img x-ref="fullImage" alt="Fullscreen RDP session screenshot"
-            class="max-h-[85vh] w-auto rounded-xl border border-slate-800 shadow-2xl">
-          <button type="button"
-            class="absolute right-3 top-3 rounded-lg bg-slate-900/80 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800 active:scale-95"
-            @click="open = false">
-            Close
-          </button>
+      <div id="gallery-lightbox" class="lightbox" role="dialog" aria-modal="true"
+        aria-label="Fullscreen session screenshot" hidden>
+        <button type="button" class="absolute inset-0 cursor-default" aria-label="Close fullscreen preview" data-lightbox-close></button>
+        <figure class="lightbox-figure">
+          <img id="gallery-lightbox-image" alt="Fullscreen RDP session screenshot">
+          <button type="button" class="lightbox-close" data-lightbox-close>Close</button>
         </figure>
       </div>
     </main>

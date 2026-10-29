@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/go-pdf/fpdf"
+
+	"rdpshot/internal/about"
 )
 
 const (
@@ -35,7 +37,8 @@ func PDF(w io.Writer, d Data) error {
 	doc.SetAutoPageBreak(true, pdfBottomMarginMm)
 	doc.SetCellMargin(pdfCellMarginMm)
 	doc.SetTitle(pdfReportTitle, false)
-	doc.SetAuthor(toolName, false)
+	doc.SetAuthor(about.Developer, false)
+	doc.SetCreator(toolName, false)
 	doc.AliasNbPages(pdfPageAlias)
 
 	headerRight := orDash(d.Scan.Name) + " (" + orDash(d.Scan.ID) + ")"
@@ -43,6 +46,7 @@ func PDF(w io.Writer, d Data) error {
 	if d.ToolVersion != "" {
 		footerLabel += " " + d.ToolVersion
 	}
+	footerLabel += " · " + about.Developer
 	footerLabel += " | Page %d of " + pdfPageAlias
 
 	doc.SetHeaderFunc(func() { pdfPageHeader(doc, headerRight) })
@@ -107,6 +111,9 @@ func pdfTitleBlock(doc *fpdf.Fpdf, d Data) {
 func pdfMetadataTable(doc *fpdf.Fpdf, d Data) {
 	pdfSectionHeading(doc, "Scan Metadata")
 	rows := [][2]string{
+		{"Organization", orDash(d.Branding.Organization)},
+		{"Engagement", orDash(firstNonEmpty(d.Branding.Engagement, d.Scan.Engagement))},
+		{"Prepared By", orDash(d.Branding.PreparedBy)},
 		{"Scan Name", orDash(d.Scan.Name)},
 		{"Scan ID", orDash(d.Scan.ID)},
 		{"Status", orDash(string(d.Scan.Status))},
@@ -115,6 +122,9 @@ func pdfMetadataTable(doc *fpdf.Fpdf, d Data) {
 		{"Scope Targets", orDash(scopeText(d.Scan))},
 		{"Generated At", orDash(formatTime(d.GeneratedAt))},
 		{"Tool Version", orDash(d.ToolVersion)},
+	}
+	if note := strings.TrimSpace(d.Branding.FooterNote); note != "" {
+		rows = append(rows, [2]string{"Note", note})
 	}
 	doc.SetFont(pdfFontFamily, "", 8)
 	doc.SetTextColor(45, 45, 45)

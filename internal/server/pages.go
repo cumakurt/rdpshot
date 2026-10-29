@@ -6,7 +6,9 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
+	"strings"
 
+	"rdpshot/internal/about"
 	"rdpshot/internal/model"
 	"rdpshot/internal/store"
 	"rdpshot/web"
@@ -14,6 +16,13 @@ import (
 
 // Page data structures. Each is passed to one page template define together
 // with the shared "head"/"nav"/"footer" partials.
+
+// WordlistPickerData drives the shared wordlist upload / default-path control.
+type WordlistPickerData struct {
+	IDPrefix     string
+	UserPath     string
+	PasswordPath string
+}
 
 // DashboardData renders the command center page.
 type DashboardData struct {
@@ -23,6 +32,7 @@ type DashboardData struct {
 	RecentScans  []model.Scan
 	ActiveScan   *model.Scan // nil when no scan is running
 	RecentEvents []model.Event
+	Wordlists    WordlistPickerData
 }
 
 // ScansData renders the scan list page.
@@ -40,6 +50,7 @@ type ScanDetailData struct {
 	Creds            []model.Credential
 	Screens          []model.Screenshot
 	Summary          model.Summary
+	Wordlists        WordlistPickerData
 }
 
 // GalleryData renders the screenshot gallery page.
@@ -52,15 +63,44 @@ type GalleryData struct {
 type ReportsData struct {
 	Title, ActiveNav string
 	Summary          model.Summary
+	Analytics        model.Analytics
 	CVEStats         []model.CVEStat
 	LatestScan       *model.Scan
 	Scans            []model.Scan
 }
 
+// CompareData renders the scan-to-scan diff page.
+type CompareData struct {
+	Title, ActiveNav string
+	Scans            []model.Scan
+	BaseID           string
+	AgainstID        string
+	Diff             *model.ScanDiff
+	Error            string
+}
+
+// SchedulesData renders the recurring scan manager.
+type SchedulesData struct {
+	Title, ActiveNav string
+	Schedules        []model.Schedule
+	Wordlists        WordlistPickerData
+}
+
+// AboutData renders the developer / project identity page.
+type AboutData struct {
+	Title, ActiveNav string
+	Info             about.Info
+}
+
 // parseTemplates parses every template file from the embedded filesystem into
 // one set. Pages execute by their define name ("dashboard", "scans", ...).
-func parseTemplates() (*template.Template, error) {
-	tpl, err := template.New("").ParseFS(web.FS, "templates/*.html")
+// toolVersion is exposed to shared partials through template functions.
+func parseTemplates(toolVersion string) (*template.Template, error) {
+	info := about.Snapshot(toolVersion)
+	funcs := template.FuncMap{
+		"appInfo": func() about.Info { return info },
+	}
+	tpl, err := template.New("").Funcs(funcs).ParseFS(web.FS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("server: parse templates: %w", err)
 	}
@@ -102,6 +142,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		RecentScans:  scans,
 		ActiveScan:   active,
 		RecentEvents: s.recentEvents(),
+		Wordlists:    s.wordlistPicker("scan"),
 	})
 }
 
@@ -164,6 +205,7 @@ func (s *Server) handleScanDetail(w http.ResponseWriter, r *http.Request) {
 		Creds:     maskCredentials(creds),
 		Screens:   screenshotViews(screens),
 		Summary:   summary,
+		Wordlists: s.wordlistPicker("brute"),
 	})
 }
 
@@ -181,11 +223,63 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleCompare renders the scan diff page. Optional query params base and
+// against select the two audits to compare.
+func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
+	scans, err := s.deps.Store.ListScans(recentScansLimit)
+	if err != nil {
+		s.internalError(w, r, "load scans", err)
+		return
+	}
+	baseID := strings.TrimSpace(r.URL.Query().Get("base"))
+	againstID := strings.TrimSpace(r.URL.Query().Get("against"))
+	data := CompareData{
+		Title:     "Compare",
+		ActiveNav: "compare",
+		Scans:     scans,
+		BaseID:    baseID,
+		AgainstID: againstID,
+	}
+	if baseID != "" && againstID != "" {
+		if baseID == againstID {
+			data.Error = "Select two different scans to compare."
+		} else {
+			diff, err := s.deps.Store.DiffScans(baseID, againstID)
+			if err != nil {
+				data.Error = err.Error()
+			} else {
+				data.Diff = &diff
+			}
+		}
+	}
+	s.renderPage(w, "compare", data)
+}
+
+// handleSchedulesPage renders the recurring scan manager.
+func (s *Server) handleSchedulesPage(w http.ResponseWriter, r *http.Request) {
+	items, err := s.deps.Store.ListSchedules()
+	if err != nil {
+		s.internalError(w, r, "load schedules", err)
+		return
+	}
+	s.renderPage(w, "schedules", SchedulesData{
+		Title:     "Schedules",
+		ActiveNav: "schedules",
+		Schedules: items,
+		Wordlists: s.wordlistPicker("sched"),
+	})
+}
+
 // handleReports renders the vulnerability and reporting hub.
 func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 	summary, err := s.deps.Store.Summary("")
 	if err != nil {
 		s.internalError(w, r, "load summary", err)
+		return
+	}
+	analytics, err := s.deps.Store.Analytics()
+	if err != nil {
+		s.internalError(w, r, "load analytics", err)
 		return
 	}
 	cveStats, err := s.deps.Store.CVEStats("")
@@ -206,9 +300,19 @@ func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 		Title:      "Reports",
 		ActiveNav:  "reports",
 		Summary:    summary,
+		Analytics:  analytics,
 		CVEStats:   cveStats,
 		LatestScan: latest,
 		Scans:      scans,
+	})
+}
+
+// handleAbout renders the developer and project identity page.
+func (s *Server) handleAbout(w http.ResponseWriter, r *http.Request) {
+	s.renderPage(w, "about", AboutData{
+		Title:     "About",
+		ActiveNav: "about",
+		Info:      about.Snapshot(s.cfg.ToolVersion),
 	})
 }
 

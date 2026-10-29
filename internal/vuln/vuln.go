@@ -171,6 +171,75 @@ func catalog() []check {
 				return "", ""
 			},
 		},
+		{
+			id:          "rdp-negotiation-failure",
+			title:       "RDP protocol negotiation failed",
+			severity:    model.SeverityLow,
+			cvss:        2.0,
+			remediation: "Review RDP security layer policy and supported protocols so authorized clients can negotiate TLS/CredSSP.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service.NegotiationFailureCode == nil {
+					return "", ""
+				}
+				return model.FindingVulnerable,
+					fmt.Sprintf("server returned RDP_NEG_FAILURE code 0x%08x", *in.Service.NegotiationFailureCode)
+			},
+		},
+		{
+			id:          "hybrid-ex-not-offered",
+			title:       "Modern CredSSP (HYBRID_EX) not selected",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Prefer HYBRID_EX where supported so CredSSP early-user-auth hardening is available to clients.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				switch in.Service.NegotiatedProtocol {
+				case rdp.ProtocolHybridEx:
+					return model.FindingNotVulnerable, "negotiation selected HYBRID_EX"
+				case rdp.ProtocolHybrid:
+					return model.FindingPotential, "negotiation selected HYBRID (CredSSP) without HYBRID_EX"
+				case rdp.ProtocolSSL:
+					return model.FindingPotential, "negotiation selected SSL/TLS without CredSSP"
+				default:
+					return "", ""
+				}
+			},
+		},
+		{
+			id:          "cert-missing-san",
+			title:       "RDP certificate lacks subject alternative names",
+			severity:    model.SeverityLow,
+			cvss:        3.1,
+			remediation: "Issue an RDP certificate with DNS/IP SANs matching the listener hostname so clients can validate identity.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				cert := in.Service.Certificate
+				if cert == nil {
+					return "", ""
+				}
+				if len(cert.DNSNames) > 0 {
+					return model.FindingNotVulnerable, fmt.Sprintf("certificate SANs: %s", strings.Join(cert.DNSNames, ", "))
+				}
+				return model.FindingPotential,
+					fmt.Sprintf("certificate subject %q has no DNS SANs", cert.Subject)
+			},
+		},
+		{
+			id:          "legacy-rdp-build",
+			title:       "Legacy RDP server build advertised",
+			severity:    model.SeverityMedium,
+			cvss:        5.0,
+			remediation: "Upgrade Windows / Remote Desktop Services to a supported build and confirm cumulative updates are applied.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service.ServerVersion == 0 {
+					return "", ""
+				}
+				// RDP 5.x / early 6.x era builds commonly appear below 0x00080000.
+				if in.Service.ServerVersion < 0x00080000 {
+					return model.FindingPotential,
+						fmt.Sprintf("MCS server core version 0x%08x suggests a legacy RDP stack", in.Service.ServerVersion)
+				}
+				return "", ""
+			},
+		},
 	}
 }
 

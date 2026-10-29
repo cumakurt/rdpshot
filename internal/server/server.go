@@ -35,19 +35,29 @@ const (
 	// defaultMaxAuthFailures bounds credential attempts per host; the quick
 	// scan form has no field for it.
 	defaultMaxAuthFailures = 5
-	// maxScanTargets bounds target expansion for one API request.
-	maxScanTargets = 65536
+	// absoluteMaxScanTargets is the hard ceiling when an operator sets an
+	// explicit positive max_targets value. 0 / empty means unlimited.
+	absoluteMaxScanTargets = 4000000
 	// maxScanTimeout rejects per-connection timeouts that would hold worker
 	// slots for unreasonable amounts of time.
 	maxScanTimeout = 10 * time.Minute
-	// maxFormBytes caps the size of a scan creation request body.
-	maxFormBytes = 1 << 20
+	// maxFormBytes caps the size of a scan creation request body, including
+	// uploaded wordlists.
+	maxFormBytes = 6 << 20
+	// maxWordlistUploadBytes caps one uploaded wordlist file.
+	maxWordlistUploadBytes = 2 << 20
+	// maxTargetsUploadBytes caps one uploaded targets list file.
+	maxTargetsUploadBytes = 2 << 20
+	// maxAuthFailureLimit bounds the per-host credential attempts a re-audit
+	// may request.
+	maxAuthFailureLimit = 50
 	// recentEventsLimit bounds the in-memory recent event buffer used by the
 	// dashboard data.
 	recentEventsLimit = 50
-	// shutdownGrace bounds how long ListenAndServe waits for running scans
-	// after cancellation before giving up on them.
-	shutdownGrace = 5 * time.Second
+	// scanStopGrace bounds how long shutdown waits for in-flight scan workers
+	// to unwind after cancellation. It is deliberately short so Ctrl+C stops
+	// the process immediately instead of hanging on slow network probes.
+	scanStopGrace = 300 * time.Millisecond
 )
 
 // Config configures the HTTP server.
@@ -56,6 +66,13 @@ type Config struct {
 	Token       string // when non-empty, every route requires Authorization: Bearer <token> or ?token=
 	OutputsDir  string // served read-only under /files/ (screenshot images)
 	ToolVersion string // shown in reports/footer
+	// UserWordlist and PasswordWordlist are the fallbacks used when a scan
+	// request enables credential checks without supplying its own wordlists.
+	UserWordlist     string
+	PasswordWordlist string
+	// MaxTargets bounds CIDR/host expansion for one API or schedule request.
+	// Zero means unlimited.
+	MaxTargets int
 }
 
 // Dependencies are the collaborators the server reads from and starts work on.
@@ -74,15 +91,25 @@ type Server struct {
 
 	handler http.Handler
 
-	// runs tracks the cancellable context of every scan started through the
-	// API so /cancel can stop it.
+	// runs tracks the cancellable context and pause control of every scan
+	// started through the API so the lifecycle endpoints can drive it.
 	runsMu sync.Mutex
-	runs   map[string]context.CancelFunc
+	runs   map[string]*scanRun
 	runsWG sync.WaitGroup
 
 	// recent buffers the latest events for the dashboard data source.
 	recentMu sync.Mutex
 	recent   []model.Event
+
+	// Runtime-editable wordlist defaults. They start from Config and can be
+	// updated from the UI without restarting the server.
+	wordlistMu       sync.RWMutex
+	userWordlist     string
+	passwordWordlist string
+
+	// sessions holds short-lived login tokens for local portal users.
+	sessionsMu sync.Mutex
+	sessions   map[string]*session
 }
 
 // New builds a server from configuration and dependencies.
@@ -96,21 +123,55 @@ func New(cfg Config, deps Dependencies) (*Server, error) {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	tpl, err := parseTemplates()
+	tpl, err := parseTemplates(cfg.ToolVersion)
 	if err != nil {
 		return nil, err
 	}
+	if cfg.MaxTargets < 0 {
+		cfg.MaxTargets = 0
+	}
+	if cfg.MaxTargets > absoluteMaxScanTargets {
+		cfg.MaxTargets = absoluteMaxScanTargets
+	}
 	s := &Server{
-		cfg:  cfg,
-		deps: deps,
-		tpl:  tpl,
-		runs: make(map[string]context.CancelFunc),
+		cfg:              cfg,
+		deps:             deps,
+		tpl:              tpl,
+		runs:             make(map[string]*scanRun),
+		userWordlist:     cfg.UserWordlist,
+		passwordWordlist: cfg.PasswordWordlist,
 	}
 	s.handler = s.routes()
 	if deps.Hub != nil {
 		go s.recordRecentEvents()
 	}
 	return s, nil
+}
+
+// wordlistDefaults returns the current server-side default wordlist paths.
+func (s *Server) wordlistDefaults() (userPath, passwordPath string) {
+	s.wordlistMu.RLock()
+	defer s.wordlistMu.RUnlock()
+	return s.userWordlist, s.passwordWordlist
+}
+
+// setWordlistDefaults updates the runtime default wordlist paths used when a
+// scan enables auth without uploading files.
+func (s *Server) setWordlistDefaults(userPath, passwordPath string) {
+	s.wordlistMu.Lock()
+	defer s.wordlistMu.Unlock()
+	s.userWordlist = userPath
+	s.passwordWordlist = passwordPath
+}
+
+// wordlistPicker builds the shared UI control for one form.
+func (s *Server) wordlistPicker(idPrefix string) WordlistPickerData {
+	userPath, passwordPath := s.wordlistDefaults()
+	return WordlistPickerData{
+		IDPrefix:     idPrefix,
+		UserPath:     userPath,
+		PasswordPath: passwordPath,
+	}
 }
 
 // Handler returns the HTTP handler for use with custom listeners or tests.
@@ -129,6 +190,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		Handler:           s.handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	schedCtx, stopScheduler := context.WithCancel(ctx)
+	defer stopScheduler()
+	go s.runScheduler(schedCtx)
+
 	errCh := make(chan error, 1)
 	go func() {
 		s.deps.Logger.Info("http server listening", "addr", s.cfg.Addr)
@@ -137,16 +202,20 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		stopScheduler()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return fmt.Errorf("server: listen on %s: %w", s.cfg.Addr, err)
 	case <-ctx.Done():
+		s.deps.Logger.Info("shutdown requested; stopping scans and web server")
+		stopScheduler()
 		s.cancelAllScans()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("server: shutdown: %w", err)
+		// Close tears down the listener and every active connection (including
+		// SSE streams) immediately. Shutdown would wait for idle clients and
+		// make Ctrl+C feel unresponsive.
+		if err := srv.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("server: close: %w", err)
 		}
 		// ListenAndServe has returned ErrServerClosed by now; drain it so the
 		// goroutine can exit.
@@ -163,21 +232,53 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleDashboard)
 	mux.HandleFunc("GET /scans", s.handleScans)
 	mux.HandleFunc("GET /scans/{id}", s.handleScanDetail)
+	mux.HandleFunc("GET /compare", s.handleCompare)
+	mux.HandleFunc("GET /schedules", s.handleSchedulesPage)
 	mux.HandleFunc("GET /gallery", s.handleGallery)
 	mux.HandleFunc("GET /reports", s.handleReports)
+	mux.HandleFunc("GET /about", s.handleAbout)
 	mux.Handle("GET /static/", http.FileServer(http.FS(web.FS)))
 	mux.Handle("GET /files/", s.filesHandler())
 
 	mux.HandleFunc("POST /api/v1/scans", s.handleCreateScan)
 	mux.HandleFunc("GET /api/v1/scans", s.handleListScans)
 	mux.HandleFunc("GET /api/v1/scans/{id}", s.handleGetScan)
+	mux.HandleFunc("PATCH /api/v1/scans/{id}", s.handleRenameScan)
+	mux.HandleFunc("DELETE /api/v1/scans/{id}", s.handleDeleteScan)
 	mux.HandleFunc("POST /api/v1/scans/{id}/cancel", s.handleCancelScan)
+	mux.HandleFunc("POST /api/v1/scans/{id}/pause", s.handlePauseScan)
+	mux.HandleFunc("POST /api/v1/scans/{id}/resume", s.handleResumeScan)
+	mux.HandleFunc("POST /api/v1/scans/{id}/brute", s.handleBruteForceScan)
+	mux.HandleFunc("GET /api/v1/scans/{id}/diff", s.handleScanDiff)
 	mux.HandleFunc("GET /api/v1/scans/{id}/findings", s.handleScanFindings)
 	mux.HandleFunc("GET /api/v1/scans/{id}/hosts", s.handleScanHosts)
 	mux.HandleFunc("GET /api/v1/scans/{id}/screenshots", s.handleScanScreenshots)
 	mux.HandleFunc("GET /api/v1/scans/{id}/credentials", s.handleScanCredentials)
 	mux.HandleFunc("GET /api/v1/scans/{id}/report", s.handleScanReport)
+	mux.HandleFunc("GET /api/v1/schedules", s.handleListSchedules)
+	mux.HandleFunc("POST /api/v1/schedules", s.handleCreateSchedule)
+	mux.HandleFunc("GET /api/v1/schedules/{id}", s.handleGetSchedule)
+	mux.HandleFunc("PATCH /api/v1/schedules/{id}", s.handleUpdateSchedule)
+	mux.HandleFunc("DELETE /api/v1/schedules/{id}", s.handleDeleteSchedule)
 	mux.HandleFunc("GET /api/v1/summary", s.handleSummary)
+	mux.HandleFunc("GET /api/v1/about", s.handleAPIAbout)
+	mux.HandleFunc("GET /api/v1/analytics", s.handleAnalytics)
+	mux.HandleFunc("GET /api/v1/trend", s.handleTrend)
+	mux.HandleFunc("GET /api/v1/settings/wordlists", s.handleGetWordlistSettings)
+	mux.HandleFunc("PATCH /api/v1/settings/wordlists", s.handleUpdateWordlistSettings)
+	mux.HandleFunc("GET /api/v1/settings/branding", s.handleGetBranding)
+	mux.HandleFunc("PUT /api/v1/settings/branding", s.handlePutBranding)
+	mux.HandleFunc("GET /api/v1/wordlist-sets", s.handleListWordlistSets)
+	mux.HandleFunc("POST /api/v1/wordlist-sets", s.handleCreateWordlistSet)
+	mux.HandleFunc("DELETE /api/v1/wordlist-sets/{id}", s.handleDeleteWordlistSet)
+	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
+	mux.HandleFunc("GET /api/v1/users", s.handleListUsers)
+	mux.HandleFunc("POST /api/v1/users", s.handleCreateUser)
+	mux.HandleFunc("DELETE /api/v1/users/{id}", s.handleDeleteUser)
+	mux.HandleFunc("GET /api/v1/audit", s.handleListAudit)
+	mux.HandleFunc("PATCH /api/v1/findings/{fid}/triage", s.handleUpdateFindingTriage)
+	mux.HandleFunc("PATCH /api/v1/scans/{id}/meta", s.handleUpdateScanMeta)
+	mux.HandleFunc("GET /api/v1/scans/{id}/evidence-pack", s.handleEvidencePack)
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 
 	// Catch-all: unknown paths render the small HTML error page (or JSON when
@@ -214,12 +315,21 @@ func screenshotView(sc model.Screenshot) model.Screenshot {
 	return sc
 }
 
+// scanRun tracks the live control surface of one scan started by this server.
+type scanRun struct {
+	cancel  context.CancelFunc
+	control *scanner.RunControl
+}
+
 // startScan registers a cancellable run for a freshly created scan and starts
 // the scan engine in the background.
 func (s *Server) startScan(scan model.Scan, endpoints []model.Endpoint) {
 	ctx, cancel := context.WithCancel(context.Background())
+	control := scanner.NewRunControl(func(status model.ScanStatus, progress model.Progress) {
+		s.persistScanState(scan.ID, status, progress)
+	})
 	s.runsMu.Lock()
-	s.runs[scan.ID] = cancel
+	s.runs[scan.ID] = &scanRun{cancel: cancel, control: control}
 	s.runsMu.Unlock()
 	s.runsWG.Add(1)
 	go func() {
@@ -230,30 +340,62 @@ func (s *Server) startScan(scan model.Scan, endpoints []model.Endpoint) {
 			cancel()
 			s.runsWG.Done()
 		}()
-		// Run mutates the scan record; hand it a private copy.
+		// The engine mutates the scan record; hand it a private copy.
 		running := scan
-		s.deps.Engine.Run(ctx, &running, endpoints)
+		s.deps.Engine.RunWithControl(ctx, &running, endpoints, control)
+		finished, err := s.deps.Store.GetScan(scan.ID)
+		if err == nil {
+			s.maybeNotifyScan(finished)
+		}
 	}()
 	s.deps.Logger.Info("scan queued", "scan_id", scan.ID, "endpoints", len(endpoints))
+}
+
+// persistScanState stores a pause/resume transition and its progress snapshot.
+// Live counters only exist in memory while a scan runs, so persisting them here
+// keeps the stored record consistent with what the UI shows.
+func (s *Server) persistScanState(scanID string, status model.ScanStatus, progress model.Progress) {
+	current, err := s.deps.Store.GetScan(scanID)
+	if err != nil {
+		s.deps.Logger.Error("load scan for state change", "scan_id", scanID, "error", err.Error())
+		return
+	}
+	current.Status = status
+	current.Progress = progress
+	if err := s.deps.Store.UpdateScan(current); err != nil {
+		s.deps.Logger.Error("persist scan state", "scan_id", scanID, "error", err.Error())
+	}
+}
+
+// scanControl returns the pause control of a scan running on this server.
+func (s *Server) scanControl(scanID string) *scanner.RunControl {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+	run, ok := s.runs[scanID]
+	if !ok {
+		return nil
+	}
+	return run.control
 }
 
 // cancelScan requests cancellation of a tracked scan run. It reports whether a
 // tracked run existed.
 func (s *Server) cancelScan(scanID string) bool {
 	s.runsMu.Lock()
-	cancel, ok := s.runs[scanID]
+	run, ok := s.runs[scanID]
 	s.runsMu.Unlock()
 	if ok {
-		cancel()
+		run.cancel()
 	}
 	return ok
 }
 
-// cancelAllScans cancels every tracked run and waits briefly for the engines.
+// cancelAllScans cancels every tracked run and waits briefly for the engines
+// to unwind. The wait is bounded by scanStopGrace so shutdown stays snappy.
 func (s *Server) cancelAllScans() {
 	s.runsMu.Lock()
-	for _, cancel := range s.runs {
-		cancel()
+	for _, run := range s.runs {
+		run.cancel()
 	}
 	s.runsMu.Unlock()
 	done := make(chan struct{})
@@ -263,7 +405,7 @@ func (s *Server) cancelAllScans() {
 	}()
 	select {
 	case <-done:
-	case <-time.After(shutdownGrace):
+	case <-time.After(scanStopGrace):
 	}
 }
 
@@ -311,6 +453,12 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 // <script> blocks of the embedded templates (for example the Tailwind config).
 // Pinning them by hash keeps the policy strict instead of allowing
 // 'unsafe-inline' for scripts.
+//
+// The hashes are computed from the template source, which is only valid while
+// html/template leaves the block untouched. Inline scripts therefore must not
+// contain Go template actions or JavaScript comments: the escaper strips
+// comments from script bodies, and any such edit must re-hash the rendered
+// output instead. TestInlineScriptHashesMatchRenderedPage guards this.
 func inlineScriptHashes() string {
 	entries, err := web.FS.ReadDir("templates")
 	if err != nil {
@@ -362,18 +510,29 @@ func inlineScriptBlocks(html string) []string {
 	}
 }
 
-// withAuth enforces the bearer token when one is configured. The query
-// parameter variant exists for clients (EventSource, image tags) that cannot
-// set request headers.
+// withAuth enforces the configured bearer token and/or a local user session.
+// Login itself stays reachable so operators can obtain a session token.
 func (s *Server) withAuth(next http.Handler) http.Handler {
-	if s.cfg.Token == "" {
-		return next
-	}
-	want := sha256.Sum256([]byte(s.cfg.Token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := tokenFromRequest(r)
-		hash := sha256.Sum256([]byte(got))
-		if subtle.ConstantTimeCompare(hash[:], want[:]) != 1 {
+		if r.URL.Path == "/api/v1/login" && r.Method == http.MethodPost {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.cfg.Token != "" {
+			want := sha256.Sum256([]byte(s.cfg.Token))
+			got := tokenFromRequest(r)
+			hash := sha256.Sum256([]byte(got))
+			if subtle.ConstantTimeCompare(hash[:], want[:]) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		if sess := s.sessionFromRequest(r); sess != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		n, err := s.deps.Store.UserCount()
+		if (err == nil && n > 0) || s.cfg.Token != "" {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			s.writeError(w, r, http.StatusUnauthorized, "unauthorized")
 			return

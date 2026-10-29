@@ -53,10 +53,20 @@ type ScanStatus string
 const (
 	ScanPending   ScanStatus = "pending"
 	ScanRunning   ScanStatus = "running"
+	ScanPaused    ScanStatus = "paused"
 	ScanCompleted ScanStatus = "completed"
 	ScanFailed    ScanStatus = "failed"
 	ScanCancelled ScanStatus = "cancelled"
 )
+
+// Terminal reports whether the scan will not produce further results.
+func (s ScanStatus) Terminal() bool {
+	switch s {
+	case ScanCompleted, ScanFailed, ScanCancelled:
+		return true
+	}
+	return false
+}
 
 // FindingStatus states how confident a check outcome is.
 type FindingStatus string
@@ -136,6 +146,12 @@ type Scan struct {
 	Options    ScanOptions `json:"options"`
 	Progress   Progress    `json:"progress"`
 	Error      string      `json:"error,omitempty"`
+	// Engagement groups scans under a client or engagement label.
+	Engagement string `json:"engagement,omitempty"`
+	// Tags are free-form labels for filtering and reporting.
+	Tags []string `json:"tags,omitempty"`
+	// ScheduleID links a scan back to the schedule that queued it, when any.
+	ScheduleID string `json:"schedule_id,omitempty"`
 }
 
 // CertificateInfo describes the TLS certificate presented by the server.
@@ -183,22 +199,44 @@ type Host struct {
 	UpdatedAt time.Time    `json:"updated_at"`
 }
 
+// TriageStatus is the operator workflow state of a finding.
+type TriageStatus string
+
+const (
+	TriageOpen          TriageStatus = "open"
+	TriageConfirmed     TriageStatus = "confirmed"
+	TriageFalsePositive TriageStatus = "false_positive"
+	TriageRemediated    TriageStatus = "remediated"
+)
+
+// Valid reports whether the triage status is known.
+func (t TriageStatus) Valid() bool {
+	switch t {
+	case TriageOpen, TriageConfirmed, TriageFalsePositive, TriageRemediated:
+		return true
+	}
+	return false
+}
+
 // Finding is one check outcome attached to a host.
 type Finding struct {
-	ID          int64         `json:"id"`
-	ScanID      string        `json:"scan_id"`
-	HostID      int64         `json:"host_id"`
-	Address     string        `json:"address"`
-	Port        uint16        `json:"port"`
-	CheckID     string        `json:"check_id"`
-	Title       string        `json:"title"`
-	Severity    Severity      `json:"severity"`
-	Status      FindingStatus `json:"status"`
-	CVE         string        `json:"cve,omitempty"`
-	CVSS        float64       `json:"cvss,omitempty"`
-	Evidence    string        `json:"evidence,omitempty"`
-	Remediation string        `json:"remediation,omitempty"`
-	DetectedAt  time.Time     `json:"detected_at"`
+	ID              int64         `json:"id"`
+	ScanID          string        `json:"scan_id"`
+	HostID          int64         `json:"host_id"`
+	Address         string        `json:"address"`
+	Port            uint16        `json:"port"`
+	CheckID         string        `json:"check_id"`
+	Title           string        `json:"title"`
+	Severity        Severity      `json:"severity"`
+	Status          FindingStatus `json:"status"`
+	CVE             string        `json:"cve,omitempty"`
+	CVSS            float64       `json:"cvss,omitempty"`
+	Evidence        string        `json:"evidence,omitempty"`
+	Remediation     string        `json:"remediation,omitempty"`
+	DetectedAt      time.Time     `json:"detected_at"`
+	TriageStatus    TriageStatus  `json:"triage_status"`
+	TriageNote      string        `json:"triage_note,omitempty"`
+	TriageUpdatedAt *time.Time    `json:"triage_updated_at,omitempty"`
 }
 
 // Credential is a verified or attempted login record.
@@ -270,12 +308,54 @@ type CVEStat struct {
 	Hosts []string `json:"hosts"`
 }
 
+// LabeledCount is one bucket of a labelled distribution, such as the TLS
+// versions observed across scanned hosts.
+type LabeledCount struct {
+	Label string `json:"label"`
+	Count int64  `json:"count"`
+}
+
+// HostRisk aggregates the findings of one endpoint across every scan. The
+// reports hub ranks endpoints by RiskScore so the most exposed systems are
+// listed first.
+type HostRisk struct {
+	Address     string   `json:"address"`
+	Port        uint16   `json:"port"`
+	OSGuess     string   `json:"os_guess,omitempty"`
+	TLSVersion  string   `json:"tls_version,omitempty"`
+	NLARequired bool     `json:"nla_required"`
+	SelfSigned  bool     `json:"self_signed"`
+	Open        bool     `json:"open"`
+	Findings    int64    `json:"findings"`
+	RiskScore   float64  `json:"risk_score"`
+	MaxSeverity Severity `json:"max_severity"`
+}
+
+// Analytics is the cross-scan posture summary rendered by the reports hub.
+// Repeated observations of the same endpoint are collapsed so one estate does
+// not inflate the numbers just because it was scanned several times.
+type Analytics struct {
+	HostsScanned     int64          `json:"hosts_scanned"`
+	HostsOpen        int64          `json:"hosts_open"`
+	NLAMissing       int64          `json:"nla_missing"`
+	LegacyTLS        int64          `json:"legacy_tls"`
+	SelfSigned       int64          `json:"self_signed"`
+	CriticalFindings int64          `json:"critical_findings"`
+	AvgCVSS          float64        `json:"avg_cvss"`
+	Exposure         []LabeledCount `json:"exposure"`
+	OSTypes          []LabeledCount `json:"os_types"`
+	Statuses         []LabeledCount `json:"statuses"`
+	TopHosts         []HostRisk     `json:"top_hosts"`
+}
+
 // EventType enumerates live event kinds published over SSE.
 type EventType string
 
 const (
 	EventScanStarted  EventType = "scan.started"
 	EventScanProgress EventType = "scan.progress"
+	EventScanPaused   EventType = "scan.paused"
+	EventScanResumed  EventType = "scan.resumed"
 	EventHostDone     EventType = "host.done"
 	EventFinding      EventType = "finding"
 	EventCredential   EventType = "credential"
@@ -297,4 +377,171 @@ type Event struct {
 type LogPayload struct {
 	Level   string `json:"level"`
 	Message string `json:"message"`
+}
+
+// Schedule defines a recurring scan job. Cadence is either IntervalSeconds or
+// a five-field CronExpr (minute hour day-of-month month day-of-week).
+type Schedule struct {
+	ID               string      `json:"id"`
+	Name             string      `json:"name"`
+	Enabled          bool        `json:"enabled"`
+	IntervalSeconds  int         `json:"interval_seconds"`
+	CronExpr         string      `json:"cron_expr,omitempty"`
+	Options          ScanOptions `json:"options"`
+	NotifyWebhook    string      `json:"notify_webhook,omitempty"`
+	NotifyOnComplete bool        `json:"notify_on_complete"`
+	NotifyOnCritical bool        `json:"notify_on_critical"`
+	CreatedAt        time.Time   `json:"created_at"`
+	UpdatedAt        time.Time   `json:"updated_at"`
+	LastRunAt        *time.Time  `json:"last_run_at,omitempty"`
+	NextRunAt        *time.Time  `json:"next_run_at,omitempty"`
+	LastScanID       string      `json:"last_scan_id,omitempty"`
+	LastError        string      `json:"last_error,omitempty"`
+}
+
+// WordlistSet is a named pair of user/password wordlist paths.
+type WordlistSet struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	UserPath     string    `json:"user_path"`
+	PasswordPath string    `json:"password_path"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// UserRole controls what a local portal account may do.
+type UserRole string
+
+const (
+	RoleViewer   UserRole = "viewer"
+	RoleOperator UserRole = "operator"
+	RoleAdmin    UserRole = "admin"
+)
+
+// Valid reports whether the role is known.
+func (r UserRole) Valid() bool {
+	switch r {
+	case RoleViewer, RoleOperator, RoleAdmin:
+		return true
+	}
+	return false
+}
+
+// CanWrite reports whether the role may mutate state.
+func (r UserRole) CanWrite() bool {
+	return r == RoleOperator || r == RoleAdmin
+}
+
+// CanAdmin reports whether the role may manage users and branding.
+func (r UserRole) CanAdmin() bool {
+	return r == RoleAdmin
+}
+
+// User is a local portal account.
+type User struct {
+	ID           string    `json:"id"`
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"-"`
+	Role         UserRole  `json:"role"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// AuditEntry records one privileged or mutating action.
+type AuditEntry struct {
+	ID        int64     `json:"id"`
+	At        time.Time `json:"at"`
+	Actor     string    `json:"actor"`
+	Action    string    `json:"action"`
+	Target    string    `json:"target,omitempty"`
+	Detail    string    `json:"detail,omitempty"`
+	RemoteIP  string    `json:"remote_ip,omitempty"`
+}
+
+// ReportBranding customizes generated reports.
+type ReportBranding struct {
+	Organization string `json:"organization,omitempty"`
+	Engagement   string `json:"engagement,omitempty"`
+	PreparedBy   string `json:"prepared_by,omitempty"`
+	FooterNote   string `json:"footer_note,omitempty"`
+}
+
+// TrendPoint is one sample in a posture time series.
+type TrendPoint struct {
+	At              time.Time `json:"at"`
+	ScanID          string    `json:"scan_id"`
+	ScanName        string    `json:"scan_name"`
+	HostsOpen       int64     `json:"hosts_open"`
+	FindingsTotal   int64     `json:"findings_total"`
+	Critical        int64     `json:"critical"`
+	High            int64     `json:"high"`
+	OpenTriage      int64     `json:"open_triage"`
+}
+
+// TrendSeries is the baseline/trend payload for the reports hub.
+type TrendSeries struct {
+	Engagement string       `json:"engagement,omitempty"`
+	Points     []TrendPoint `json:"points"`
+}
+
+// ScanDiff summarises the posture delta between a base scan and a later one.
+type ScanDiff struct {
+	BaseID          string            `json:"base_id"`
+	AgainstID       string            `json:"against_id"`
+	BaseName        string            `json:"base_name"`
+	AgainstName     string            `json:"against_name"`
+	HostsAdded      []Host            `json:"hosts_added"`
+	HostsRemoved    []Host            `json:"hosts_removed"`
+	HostsChanged    []HostChange      `json:"hosts_changed"`
+	FindingsAdded   []Finding         `json:"findings_added"`
+	FindingsRemoved []Finding         `json:"findings_removed"`
+	FindingsChanged []FindingChange   `json:"findings_changed"`
+	Summary         ScanDiffSummary   `json:"summary"`
+}
+
+// ScanDiffSummary is the compact counter block shown above a diff.
+type ScanDiffSummary struct {
+	HostsAdded      int `json:"hosts_added"`
+	HostsRemoved    int `json:"hosts_removed"`
+	HostsChanged    int `json:"hosts_changed"`
+	FindingsAdded   int `json:"findings_added"`
+	FindingsRemoved int `json:"findings_removed"`
+	FindingsChanged int `json:"findings_changed"`
+}
+
+// HostChange records field-level differences for one endpoint that appears in
+// both scans.
+type HostChange struct {
+	Address string   `json:"address"`
+	Port    uint16   `json:"port"`
+	Before  HostSnap `json:"before"`
+	After   HostSnap `json:"after"`
+}
+
+// HostSnap is the comparable posture snapshot of one host.
+type HostSnap struct {
+	State       string `json:"state"`
+	NLARequired bool   `json:"nla_required"`
+	TLSVersion  string `json:"tls_version,omitempty"`
+	OSGuess     string `json:"os_guess,omitempty"`
+	SelfSigned  bool   `json:"self_signed"`
+}
+
+// FindingChange records a finding that exists on both scans but changed status
+// or severity.
+type FindingChange struct {
+	Address  string         `json:"address"`
+	Port     uint16         `json:"port"`
+	CheckID  string         `json:"check_id"`
+	Title    string         `json:"title"`
+	Before   FindingSnap    `json:"before"`
+	After    FindingSnap    `json:"after"`
+}
+
+// FindingSnap is the comparable slice of a finding.
+type FindingSnap struct {
+	Severity Severity      `json:"severity"`
+	Status   FindingStatus `json:"status"`
+	CVSS     float64       `json:"cvss"`
+	CVE      string        `json:"cve,omitempty"`
 }

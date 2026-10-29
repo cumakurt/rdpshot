@@ -203,6 +203,20 @@ func TestResolveEnforcesMaxTargets(t *testing.T) {
 	}
 }
 
+func TestResolveUnlimitedMaxTargets(t *testing.T) {
+	res, err := Resolve(context.Background(), Options{
+		Specs:      []string{"10.0.0.0/24", "10.0.1.0/24"},
+		Ports:      []uint16{3389},
+		MaxTargets: 0,
+	})
+	if err != nil {
+		t.Fatalf("unlimited resolve: %v", err)
+	}
+	if len(res.Endpoints) != 508 { // two /24s without network/broadcast
+		t.Fatalf("endpoints = %d, want 508", len(res.Endpoints))
+	}
+}
+
 func TestResolveRejectsBroadIPv6(t *testing.T) {
 	if _, err := Resolve(context.Background(), Options{Specs: []string{"2001:db8::/64"}}); err == nil {
 		t.Fatal("expected error for broad IPv6 prefix")

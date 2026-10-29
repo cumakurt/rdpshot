@@ -38,7 +38,7 @@ func Default() Config {
 		Concurrency:      64,
 		Rate:             10,
 		Timeout:          5 * time.Second,
-		MaxTargets:       65536,
+		MaxTargets:       0, // 0 = unlimited CIDR expansion
 		MaxAuthFailures:  5,
 		Addr:             "127.0.0.1:8722",
 		LogLevel:         "info",
@@ -148,8 +148,8 @@ func (c Config) Validate() error {
 	if c.Timeout <= 0 {
 		return fmt.Errorf("config: timeout must be positive, got %s", c.Timeout)
 	}
-	if c.MaxTargets <= 0 {
-		return fmt.Errorf("config: max_targets must be positive, got %d", c.MaxTargets)
+	if c.MaxTargets < 0 {
+		return fmt.Errorf("config: max_targets must not be negative (0 = unlimited), got %d", c.MaxTargets)
 	}
 	if c.MaxAuthFailures < 0 {
 		return fmt.Errorf("config: max_auth_failures must not be negative, got %d", c.MaxAuthFailures)

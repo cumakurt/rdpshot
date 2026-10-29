@@ -1,0 +1,62 @@
+{{ define "wordlist_picker" }}
+<div class="wordlist-picker" data-wordlist-picker>
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <div class="field">
+      <label for="{{ .IDPrefix }}-user-file" class="label">User wordlist file</label>
+      <input id="{{ .IDPrefix }}-user-file" name="user_wordlist_file" type="file"
+        accept=".txt,text/plain" class="input" data-wordlist-file="user">
+      <div class="wordlist-options">
+        <label class="wordlist-option">
+          <input type="radio" name="{{ .IDPrefix }}_user_source" value="default" checked
+            data-wordlist-source="user" data-source="default">
+          <span>Use default wordlist</span>
+        </label>
+        <div class="wordlist-default-box" data-wordlist-default="user">
+          <label for="{{ .IDPrefix }}-user-path" class="label">Default path</label>
+          <input id="{{ .IDPrefix }}-user-path" name="user_wordlist" type="text"
+            class="input input-mono" value="{{ .UserPath }}"
+            data-wordlist-path="user" autocomplete="off" spellcheck="false">
+          <p class="wordlist-hint">Server default for auth checks when no file is uploaded.</p>
+        </div>
+        <label class="wordlist-option">
+          <input type="radio" name="{{ .IDPrefix }}_user_source" value="upload"
+            data-wordlist-source="user" data-source="upload">
+          <span>Use uploaded file</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="{{ .IDPrefix }}-password-file" class="label">Password wordlist file</label>
+      <input id="{{ .IDPrefix }}-password-file" name="password_wordlist_file" type="file"
+        accept=".txt,text/plain" class="input" data-wordlist-file="password">
+      <div class="wordlist-options">
+        <label class="wordlist-option">
+          <input type="radio" name="{{ .IDPrefix }}_password_source" value="default" checked
+            data-wordlist-source="password" data-source="default">
+          <span>Use default wordlist</span>
+        </label>
+        <div class="wordlist-default-box" data-wordlist-default="password">
+          <label for="{{ .IDPrefix }}-password-path" class="label">Default path</label>
+          <input id="{{ .IDPrefix }}-password-path" name="password_wordlist" type="text"
+            class="input input-mono" value="{{ .PasswordPath }}"
+            data-wordlist-path="password" autocomplete="off" spellcheck="false">
+          <p class="wordlist-hint">Server default for auth checks when no file is uploaded.</p>
+        </div>
+        <label class="wordlist-option">
+          <input type="radio" name="{{ .IDPrefix }}_password_source" value="upload"
+            data-wordlist-source="password" data-source="upload">
+          <span>Use uploaded file</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="wordlist-actions">
+    <button type="button" class="btn btn-ghost btn-sm" data-wordlist-save-defaults>
+      Save paths as server defaults
+    </button>
+    <span class="wordlist-save-status hidden" data-wordlist-save-status role="status"></span>
+  </div>
+</div>
+{{ end }}

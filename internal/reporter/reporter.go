@@ -8,11 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"rdpshot/internal/about"
 	"rdpshot/internal/model"
 )
 
 // toolName identifies the generator in report headers and footers.
-const toolName = "rdpshot"
+const toolName = about.Product
 
 // Data is everything a report needs; it is fully self-contained.
 type Data struct {
@@ -25,6 +26,7 @@ type Data struct {
 	CVEStats    []model.CVEStat
 	GeneratedAt time.Time
 	ToolVersion string
+	Branding    model.ReportBranding
 }
 
 // sortedFindings returns a copy of the findings ordered by severity rank
@@ -115,6 +117,15 @@ func formatTimePtr(t *time.Time) string {
 }
 
 // orDash renders empty display values as a placeholder.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func orDash(s string) string {
 	if s == "" {
 		return "-"

@@ -1,11 +1,14 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"rdpshot/internal/model"
 )
@@ -227,5 +230,268 @@ func TestDatabaseFilePermissions(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("database permissions = %o, want 600", perm)
+	}
+}
+
+func TestDeleteScanRemovesChildren(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.CreateScan(sampleScan("s-del")); err != nil {
+		t.Fatalf("create scan: %v", err)
+	}
+	hostID, err := s.UpsertHost(model.Host{
+		ScanID:    "s-del",
+		Endpoint:  model.Endpoint{Address: "10.0.0.1", Port: 3389},
+		State:     "open",
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("upsert host: %v", err)
+	}
+	if _, err := s.InsertFinding(model.Finding{
+		ScanID: "s-del", HostID: hostID, Address: "10.0.0.1", Port: 3389,
+		CheckID: "rdp-service-exposed", Title: "exposed", Severity: model.SeverityInfo,
+		Status: model.FindingVulnerable, DetectedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("insert finding: %v", err)
+	}
+	if err := s.DeleteScan("s-del"); err != nil {
+		t.Fatalf("delete scan: %v", err)
+	}
+	if _, err := s.GetScan("s-del"); !errors.Is(err, ErrScanNotFound) {
+		t.Fatalf("get deleted scan err = %v, want ErrScanNotFound", err)
+	}
+	findings, err := s.ListFindings("s-del")
+	if err != nil {
+		t.Fatalf("list findings: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected no findings after delete, got %d", len(findings))
+	}
+}
+
+func TestRenameScan(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.CreateScan(sampleScan("s-ren")); err != nil {
+		t.Fatalf("create scan: %v", err)
+	}
+	if err := s.RenameScan("s-ren", "renamed audit"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	got, err := s.GetScan("s-ren")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Name != "renamed audit" {
+		t.Fatalf("name = %q", got.Name)
+	}
+}
+
+func TestAnalyticsDeduplicatesHosts(t *testing.T) {
+	s := openTestStore(t)
+	for _, id := range []string{"s-a", "s-b"} {
+		if err := s.CreateScan(sampleScan(id)); err != nil {
+			t.Fatalf("create scan: %v", err)
+		}
+		if _, err := s.UpsertHost(model.Host{
+			ScanID: id,
+			Endpoint: model.Endpoint{Address: "10.0.0.8", Port: 3389},
+			State: "open",
+			Service: &model.ServiceInfo{
+				NLARequired: false,
+				TLSVersion:  "TLS 1.0",
+				OSGuess:     "Windows Server",
+				Certificate: &model.CertificateInfo{SelfSigned: true},
+			},
+			UpdatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("upsert host: %v", err)
+		}
+		if _, err := s.InsertFinding(model.Finding{
+			ScanID: id, Address: "10.0.0.8", Port: 3389,
+			CheckID: "nla-not-required", Title: "NLA missing",
+			Severity: model.SeverityHigh, Status: model.FindingVulnerable,
+			CVSS: 7.5, DetectedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("insert finding: %v", err)
+		}
+	}
+
+	a, err := s.Analytics()
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if a.HostsScanned != 1 || a.HostsOpen != 1 {
+		t.Fatalf("hosts scanned/open = %d/%d, want 1/1", a.HostsScanned, a.HostsOpen)
+	}
+	if a.NLAMissing != 1 || a.LegacyTLS != 1 || a.SelfSigned != 1 {
+		t.Fatalf("posture counters = %+v", a)
+	}
+	if len(a.TopHosts) != 1 || a.TopHosts[0].Findings != 1 {
+		t.Fatalf("top hosts = %+v", a.TopHosts)
+	}
+}
+
+func TestDiffScans(t *testing.T) {
+	s := openTestStore(t)
+	for _, id := range []string{"base", "next"} {
+		if err := s.CreateScan(sampleScan(id)); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	if _, err := s.UpsertHost(model.Host{
+		ScanID: "base", Endpoint: model.Endpoint{Address: "10.0.0.1", Port: 3389},
+		State: "open", UpdatedAt: time.Now().UTC(),
+		Service: &model.ServiceInfo{NLARequired: false, TLSVersion: "TLS 1.0"},
+	}); err != nil {
+		t.Fatalf("host base: %v", err)
+	}
+	if _, err := s.UpsertHost(model.Host{
+		ScanID: "next", Endpoint: model.Endpoint{Address: "10.0.0.1", Port: 3389},
+		State: "open", UpdatedAt: time.Now().UTC(),
+		Service: &model.ServiceInfo{NLARequired: true, TLSVersion: "TLS 1.2"},
+	}); err != nil {
+		t.Fatalf("host next: %v", err)
+	}
+	if _, err := s.UpsertHost(model.Host{
+		ScanID: "next", Endpoint: model.Endpoint{Address: "10.0.0.2", Port: 3389},
+		State: "open", UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("host added: %v", err)
+	}
+	if _, err := s.InsertFinding(model.Finding{
+		ScanID: "base", Address: "10.0.0.1", Port: 3389, CheckID: "nla-not-required",
+		Title: "NLA", Severity: model.SeverityHigh, Status: model.FindingVulnerable,
+		DetectedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("finding: %v", err)
+	}
+
+	diff, err := s.DiffScans("base", "next")
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	if diff.Summary.HostsAdded != 1 || diff.Summary.HostsChanged != 1 {
+		t.Fatalf("host summary = %+v", diff.Summary)
+	}
+	if diff.Summary.FindingsRemoved != 1 {
+		t.Fatalf("findings removed = %d", diff.Summary.FindingsRemoved)
+	}
+}
+
+func TestScheduleLifecycle(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now().UTC()
+	next := now.Add(time.Hour)
+	sch := model.Schedule{
+		ID: "sched-1", Name: "nightly", Enabled: true, IntervalSeconds: 3600,
+		Options: model.ScanOptions{Targets: []string{"10.0.0.0/24"}, Ports: []uint16{3389}},
+		CreatedAt: now, UpdatedAt: now, NextRunAt: &next,
+	}
+	if err := s.CreateSchedule(sch); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := s.GetSchedule("sched-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Name != "nightly" || got.IntervalSeconds != 3600 {
+		t.Fatalf("got = %+v", got)
+	}
+	due, err := s.DueSchedules(now.Add(2 * time.Hour))
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("due = %d", len(due))
+	}
+	if err := s.DeleteSchedule("sched-1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+// TestMigrateFromV2Shape reproduces a pre-v3 database whose findings/scans
+// tables lack the newer columns. Opening it must ALTER the tables before any
+// index that references triage_status / engagement is created.
+func TestMigrateFromV2Shape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v2.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE scans (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  options_json TEXT NOT NULL,
+  progress_json TEXT NOT NULL,
+  error TEXT
+);
+CREATE TABLE findings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id TEXT NOT NULL,
+  host_id INTEGER NOT NULL,
+  address TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  check_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  status TEXT NOT NULL,
+  cvss REAL NOT NULL DEFAULT 0,
+  cve TEXT,
+  evidence TEXT,
+  remediation TEXT,
+  detected_at TEXT NOT NULL
+);
+CREATE TABLE schedules (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  interval_seconds INTEGER NOT NULL,
+  options_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_run_at TEXT,
+  next_run_at TEXT,
+  last_scan_id TEXT,
+  last_error TEXT
+);
+PRAGMA user_version = 2;
+`)
+	if err != nil {
+		t.Fatalf("seed v2 schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open migrated store: %v", err)
+	}
+	defer s.Close()
+
+	ok, err := s.hasColumn("findings", "triage_status")
+	if err != nil || !ok {
+		t.Fatalf("triage_status missing after migrate: ok=%v err=%v", ok, err)
+	}
+	ok, err = s.hasColumn("scans", "engagement")
+	if err != nil || !ok {
+		t.Fatalf("engagement missing after migrate: ok=%v err=%v", ok, err)
+	}
+
+	sc := sampleScan("migrated-1")
+	if err := s.CreateScan(sc); err != nil {
+		t.Fatalf("create scan after migrate: %v", err)
+	}
+	if _, err := s.InsertFinding(model.Finding{
+		ScanID: sc.ID, HostID: 1, Address: "10.0.0.1", Port: 3389,
+		CheckID: "rdp-service-exposed", Title: "exposed", Severity: model.SeverityInfo,
+		Status: model.FindingVulnerable, DetectedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("insert finding after migrate: %v", err)
 	}
 }

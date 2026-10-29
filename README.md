@@ -44,12 +44,21 @@ web UI.
 * **Credential audit (opt-in)** — NLA/CredSSP + NTLMv2 dictionary checks with
   worker pool, jittered pacing, per-host failure budget and lockout
   detection.
-* **Session screenshots (opt-in)** — after a verified login, a session image
-  is captured via FreeRDP under a headless X server.
+* **Session screenshots (opt-in)** — after a verified login, FreeRDP captures a
+  live session image when available; otherwise a pure-Go session-evidence PNG
+  is stored so slim installs still record proof of authentication.
+* **Scan compare** — diff hosts and findings between two audits.
+* **Finding triage** — open / confirmed / false positive / remediated workflow.
+* **Engagements & tags** — label scans for client/scope filtering and trends.
+* **Schedules** — interval or five-field cron cadence with optional webhooks.
+* **Evidence pack** — ZIP export of HTML/CSV/PDF plus screenshots.
+* **Trend / baseline** — posture time series across completed scans.
+* **Local users & audit log** — optional portal accounts with role-aware sessions.
+* **Named wordlist sets** and report branding metadata.
 * **Persistence** — SQLite (pure Go, no CGO) for scans, hosts, findings,
   credentials and screenshot metadata.
 * **Reporting** — self-contained HTML report, SIEM-friendly CSV, management
-  PDF.
+  PDF with branding fields.
 * **Web UI + REST API** — dashboard, live scan progress (SSE), scan history,
   findings, screenshot gallery, report center, bearer-token protection.
 
@@ -58,6 +67,9 @@ web UI.
 | Package | Responsibility |
 |---|---|
 | `cmd/rdpshot` | CLI entrypoint: `scan`, `serve`, `report`, `targets`, `version` |
+| `internal/about` | Product identity and developer credits shared by CLI, UI and reports |
+| `internal/cronexpr` | Five-field cron parser for schedule cadence |
+| `internal/notify` | Outbound webhook notifications for scheduled scans |
 | `internal/model` | Shared domain types (Scan, Host, Finding, Credential, Screenshot, Event, ...) |
 | `internal/config` | Configuration resolution: defaults, JSON file, `RDSHOT_*` env, flags |
 | `internal/target` | Target spec parsing and expansion (IP, CIDR, hostname, `@file`, blacklist) |
@@ -68,7 +80,7 @@ web UI.
 | `internal/ntlm` | NTLMv2 message construction and parsing |
 | `internal/credssp` | CredSSP/SPNEGO/TSRequest encoding for NLA authentication |
 | `internal/auth` | RDP NLA authentication with classified error outcomes |
-| `internal/screenshot` | `xfreerdp`-based session screenshot grabber |
+| `internal/screenshot` | Auto grabber: FreeRDP when available, pure-Go evidence card otherwise |
 | `internal/store` | SQLite persistence and aggregate queries |
 | `internal/events` | Bounded publish/subscribe hub for live events (SSE) |
 | `internal/reporter` | HTML, CSV and PDF report rendering |
@@ -167,7 +179,7 @@ Flags must come before the target specifications. Targets are one or more of:
 | Command | Purpose | Key flags |
 |---|---|---|
 | `scan` | Run a scan in the foreground | `--name`, `--ports` (default `3389`), `--blacklist`, `--concurrency`, `--rate`, `--timeout`, `--max-targets`, `--max-auth-failures`, `--enable-vuln` (default on), `--enable-auth`, `--enable-screens`, `--ack-authorized`, `--user-wordlist`, `--password-wordlist`, `--report none\|html\|csv\|pdf`, `--report-dir`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format` |
-| `serve` | Start the web UI and REST API | `--addr` (default `127.0.0.1:8722`), `--token`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format`, `--user-wordlist`, `--password-wordlist`, `--max-auth-failures` |
+| `serve` | Start the web UI and REST API | `--addr` (default `127.0.0.1:8722`), `--token`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format`, `--user-wordlist`, `--password-wordlist`, `--max-auth-failures`, `--max-targets` |
 | `report` | Render a stored scan into a report | `--scan <id>` (required), `--format html\|csv\|pdf`, `-o/--output`, `--db` |
 | `targets` | Resolve targets and print `address:port` lines | `--ports`, `--blacklist`, `--max-targets` |
 | `version` | Print `rdpshot <version>` | — |
@@ -193,7 +205,7 @@ Values are resolved with the following precedence (highest first):
 | concurrency | `RDSHOT_CONCURRENCY` | `--concurrency` | `64` |
 | rate (conn/s) | `RDSHOT_RATE` | `--rate` | `10` |
 | dial timeout | `RDSHOT_TIMEOUT` | `--timeout` | `5s` |
-| max targets | `RDSHOT_MAX_TARGETS` | `--max-targets` | `65536` |
+| max targets | `RDSHOT_MAX_TARGETS` | `--max-targets` | `0` (unlimited; set a positive value to cap) |
 | max auth failures per host | `RDSHOT_MAX_AUTH_FAILURES` | `--max-auth-failures` | `5` |
 | server addr | `RDSHOT_ADDR` | `--addr` | `127.0.0.1:8722` |
 | auth token | `RDSHOT_TOKEN` | `--token` | empty (localhost only) |
@@ -220,21 +232,49 @@ reachable beyond localhost, set `--token` (or `RDSHOT_TOKEN`): every route then
 requires `Authorization: Bearer <token>` or `?token=`.
 
 Web pages: `/` dashboard, `/scans` history, `/scans/{id}` live scan detail,
-`/gallery` screenshot gallery, `/reports` report center. Screenshot images are
-served read-only under `/files/`.
+`/compare` scan diff, `/schedules` recurring audits, `/gallery` screenshot
+gallery, `/reports` report center, `/about` developer credits. Screenshot
+images are served read-only under `/files/`. Every page footer shows the
+build version and developer attribution.
 
 | Method | Route | Description |
 |---|---|---|
-| `POST` | `/api/v1/scans` | Start a new scan |
+| `POST` | `/api/v1/scans` | Start a new scan (multipart wordlist uploads supported) |
 | `GET` | `/api/v1/scans` | List past scans |
 | `GET` | `/api/v1/scans/{id}` | Scan detail and progress |
-| `POST` | `/api/v1/scans/{id}/cancel` | Cancel a running scan |
+| `PATCH` | `/api/v1/scans/{id}` | Rename a scan |
+| `DELETE` | `/api/v1/scans/{id}` | Delete a finished scan and its artifacts |
+| `POST` | `/api/v1/scans/{id}/cancel` | Cancel a running or paused scan |
+| `POST` | `/api/v1/scans/{id}/pause` | Pause a running scan (queued work is kept) |
+| `POST` | `/api/v1/scans/{id}/resume` | Resume a paused scan |
+| `POST` | `/api/v1/scans/{id}/brute` | Credential-only re-audit of discovered hosts |
+| `GET` | `/api/v1/scans/{id}/diff?against={id}` | Diff hosts/findings against another scan |
 | `GET` | `/api/v1/scans/{id}/findings` | Findings of a scan |
 | `GET` | `/api/v1/scans/{id}/hosts` | Hosts of a scan |
 | `GET` | `/api/v1/scans/{id}/screenshots` | Screenshot metadata of a scan |
 | `GET` | `/api/v1/scans/{id}/credentials` | Verified credentials (masked) |
 | `GET` | `/api/v1/scans/{id}/report?format=html\|csv\|pdf` | Download a report |
+| `GET` | `/api/v1/schedules` | List recurring schedules |
+| `POST` | `/api/v1/schedules` | Create a recurring schedule |
+| `GET` | `/api/v1/schedules/{id}` | Schedule detail |
+| `PATCH` | `/api/v1/schedules/{id}` | Enable/disable, retune or run-now |
+| `DELETE` | `/api/v1/schedules/{id}` | Delete a schedule |
+| `GET` | `/api/v1/settings/wordlists` | Current default wordlist paths |
+| `PATCH` | `/api/v1/settings/wordlists` | Update runtime default wordlist paths |
 | `GET` | `/api/v1/summary` | Dashboard summary |
+| `GET` | `/api/v1/about` | Product version and developer credits |
+| `GET` | `/api/v1/analytics` | Cross-scan posture analytics |
+| `GET` | `/api/v1/trend` | Posture trend/baseline series |
+| `PATCH` | `/api/v1/findings/{fid}/triage` | Update finding triage status/note |
+| `PATCH` | `/api/v1/scans/{id}/meta` | Update engagement/tags |
+| `GET` | `/api/v1/scans/{id}/evidence-pack` | Download evidence ZIP |
+| `GET/PUT` | `/api/v1/settings/branding` | Report branding metadata |
+| `GET/POST` | `/api/v1/wordlist-sets` | Named wordlist sets |
+| `DELETE` | `/api/v1/wordlist-sets/{id}` | Delete a wordlist set |
+| `POST` | `/api/v1/login` | Local user login (session token) |
+| `GET/POST` | `/api/v1/users` | List/create local users |
+| `DELETE` | `/api/v1/users/{id}` | Delete a local user |
+| `GET` | `/api/v1/audit` | Recent audit log entries |
 | `GET` | `/api/v1/events` | Live event stream (SSE, `?scan=` filters) |
 
 ## Vulnerability checks
@@ -250,6 +290,10 @@ served read-only under `/files/`.
 | `weak-tls` | — | medium | TLS 1.0/1.1 or weak cipher (RC4/3DES/NULL) |
 | `self-signed-cert` | — | medium | Self-signed certificate chain |
 | `expired-cert` | — | medium | Certificate `NotAfter` in the past |
+| `rdp-negotiation-failure` | — | low | Server returned `RDP_NEG_FAILURE` |
+| `hybrid-ex-not-offered` | — | info | CredSSP without `HYBRID_EX` / TLS-only |
+| `cert-missing-san` | — | low | Certificate has no DNS SANs |
+| `legacy-rdp-build` | — | medium | MCS server core version looks legacy |
 
 ## Limitations
 

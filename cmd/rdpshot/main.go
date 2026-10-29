@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"rdpshot/internal/about"
 	"rdpshot/internal/auth"
 	"rdpshot/internal/config"
 	"rdpshot/internal/events"
@@ -56,7 +57,7 @@ Commands:
   serve     Start the web UI and REST API.
   report    Generate a report from stored scan results.
   targets   Resolve target specifications and print the endpoints.
-  version   Print the tool version.
+  version   Print the tool version and developer credits.
 
 Use "rdpshot <command> -h" for the flags of a command.
 
@@ -70,6 +71,10 @@ Target specifications:
 Only scan systems you are authorized to test. Credential checks and
 screenshots require --ack-authorized to confirm you are authorized to test
 these targets.
+
+Developer: Cuma KURT <cumakurt@gmail.com>
+GitHub:    https://github.com/cumakurt/rdpshot
+License:   GPL-3.0
 
 Exit codes: 0 success, 1 runtime error, 2 usage or validation error.
 `
@@ -94,7 +99,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "targets":
 		return runTargets(args[1:], stdout, stderr)
 	case "version":
-		fmt.Fprintf(stdout, "rdpshot %s\n", version)
+		fmt.Fprint(stdout, about.VersionBanner(version))
 		return exitOK
 	case "help", "-h", "--help":
 		fmt.Fprint(stderr, usageText)
@@ -174,7 +179,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	concurrency := fs.Int("concurrency", def.Concurrency, "number of endpoints probed in parallel")
 	rate := fs.Float64("rate", def.Rate, "maximum connection attempts per second")
 	timeout := fs.Duration("timeout", def.Timeout, "per-connection timeout")
-	maxTargets := fs.Int("max-targets", def.MaxTargets, "hard limit on the number of expanded endpoints")
+	maxTargets := fs.Int("max-targets", def.MaxTargets, "max expanded endpoints (0 = unlimited)")
 	maxAuthFailures := fs.Int("max-auth-failures", def.MaxAuthFailures, "maximum rejected logins per host during the credential audit")
 	enableVuln := fs.Bool("enable-vuln", true, "run the vulnerability checks")
 	enableAuth := fs.Bool("enable-auth", false, "run the credential audit (requires --ack-authorized)")
@@ -288,7 +293,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	defer hub.Close()
 
 	authenticator := auth.NewCredSSPAuthenticator(cfg.Timeout)
-	grabber := screenshot.NewXFreeRDPGrabber(filepath.Join(cfg.OutputsDir, "screenshots"))
+	grabber := screenshot.NewAutoGrabber(filepath.Join(cfg.OutputsDir, "screenshots"), logger)
 	engine := scanner.New(scanner.Dependencies{
 		Store:         st,
 		Hub:           hub,
@@ -393,49 +398,6 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// printEvents renders live scan events as plain, non-interactive-friendly
-// lines. Progress lines are only reprinted when the counters change.
-func printEvents(sub *events.Subscription, w io.Writer) {
-	lastStatus := ""
-	for ev := range sub.C() {
-		switch ev.Type {
-		case model.EventScanProgress:
-			p, ok := ev.Payload.(model.Progress)
-			if !ok {
-				continue
-			}
-			line := fmt.Sprintf("[%d/%d] open=%d findings=%d creds=%d", p.Done, p.Total, p.Open, p.Findings, p.Creds)
-			if line != lastStatus {
-				fmt.Fprintln(w, line)
-				lastStatus = line
-			}
-		case model.EventFinding:
-			f, ok := ev.Payload.(model.Finding)
-			if !ok {
-				continue
-			}
-			fmt.Fprintf(w, "[%s] %s %s:%d %s\n", f.Severity, f.CheckID, f.Address, f.Port, f.Title)
-		case model.EventCredential:
-			c, ok := ev.Payload.(model.Credential)
-			if !ok {
-				continue
-			}
-			fmt.Fprintf(w, "verified credential: %s@%s:%d\n", c.Username, c.Address, c.Port)
-		case model.EventScreenshot:
-			s, ok := ev.Payload.(model.Screenshot)
-			if !ok {
-				continue
-			}
-			fmt.Fprintf(w, "screenshot: %s\n", s.FilePath)
-		case model.EventLog:
-			p, ok := ev.Payload.(model.LogPayload)
-			if !ok {
-				continue
-			}
-			fmt.Fprintf(w, "log: [%s] %s\n", p.Level, p.Message)
-		}
-	}
-}
 
 // runServe starts the web UI and REST API.
 func runServe(args []string, stdout, stderr io.Writer) int {
@@ -453,6 +415,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	userWordlist := fs.String("user-wordlist", def.UserWordlist, "default username wordlist for credential audits")
 	passwordWordlist := fs.String("password-wordlist", def.PasswordWordlist, "default password wordlist for credential audits")
 	maxAuthFailures := fs.Int("max-auth-failures", def.MaxAuthFailures, "default maximum rejected logins per host")
+	maxTargets := fs.Int("max-targets", def.MaxTargets, "max expanded endpoints per scan (0 = unlimited)")
 
 	if err := fs.Parse(args); err != nil {
 		return flagErrorExit(err)
@@ -487,6 +450,8 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 			cfg.PasswordWordlist = *passwordWordlist
 		case "max-auth-failures":
 			cfg.MaxAuthFailures = *maxAuthFailures
+		case "max-targets":
+			cfg.MaxTargets = *maxTargets
 		}
 	})
 	if err := cfg.Validate(); err != nil {
@@ -506,7 +471,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	defer hub.Close()
 
 	authenticator := auth.NewCredSSPAuthenticator(cfg.Timeout)
-	grabber := screenshot.NewXFreeRDPGrabber(filepath.Join(cfg.OutputsDir, "screenshots"))
+	grabber := screenshot.NewAutoGrabber(filepath.Join(cfg.OutputsDir, "screenshots"), logger)
 	engine := scanner.New(scanner.Dependencies{
 		Store:         st,
 		Hub:           hub,
@@ -516,10 +481,13 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	})
 
 	srv, err := server.New(server.Config{
-		Addr:        cfg.Addr,
-		Token:       cfg.Token,
-		OutputsDir:  cfg.OutputsDir,
-		ToolVersion: version,
+		Addr:             cfg.Addr,
+		Token:            cfg.Token,
+		OutputsDir:       cfg.OutputsDir,
+		ToolVersion:      version,
+		UserWordlist:     cfg.UserWordlist,
+		PasswordWordlist: cfg.PasswordWordlist,
+		MaxTargets:       cfg.MaxTargets,
 	}, server.Dependencies{
 		Store:  st,
 		Hub:    hub,
@@ -532,6 +500,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "web UI: http://%s/\n", cfg.Addr)
+	fmt.Fprintf(stdout, "version: %s %s · %s\n", about.Product, version, about.ContactLine())
 	if cfg.Token != "" {
 		fmt.Fprintln(stdout, "token auth: enabled")
 	} else {
@@ -722,7 +691,7 @@ func runTargets(args []string, stdout, stderr io.Writer) int {
 
 	portsSpec := fs.String("ports", "3389", "ports for specs without an explicit port, e.g. \"3389,3390,33800-33810\"")
 	blacklistSpec := fs.String("blacklist", "", "comma separated IPs, CIDRs or hostnames to exclude")
-	maxTargets := fs.Int("max-targets", def.MaxTargets, "hard limit on the number of expanded endpoints")
+	maxTargets := fs.Int("max-targets", def.MaxTargets, "max expanded endpoints (0 = unlimited)")
 
 	if err := fs.Parse(args); err != nil {
 		return flagErrorExit(err)

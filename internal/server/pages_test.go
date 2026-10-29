@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"rdpshot/internal/about"
 	"rdpshot/internal/model"
 )
 
@@ -165,6 +166,11 @@ func buildSampleData() sampleData {
 			RecentScans:  scans,
 			ActiveScan:   &scans[1],
 			RecentEvents: []model.Event{},
+			Wordlists: WordlistPickerData{
+				IDPrefix:     "scan",
+				UserPath:     "wordlists/default_users.txt",
+				PasswordPath: "wordlists/default_passwords.txt",
+			},
 		},
 		scans: ScansData{
 			Title:     "Scans",
@@ -180,6 +186,11 @@ func buildSampleData() sampleData {
 			Creds:     []model.Credential{cred},
 			Screens:   []model.Screenshot{screen},
 			Summary:   summary,
+			Wordlists: WordlistPickerData{
+				IDPrefix:     "brute",
+				UserPath:     "wordlists/default_users.txt",
+				PasswordPath: "wordlists/default_passwords.txt",
+			},
 		},
 		gallery: GalleryData{
 			Title:     "Gallery",
@@ -200,7 +211,7 @@ func buildSampleData() sampleData {
 // TestTemplatePagesRender executes every template define with zero-value and
 // fully populated data so template/struct field mismatches fail loudly.
 func TestTemplatePagesRender(t *testing.T) {
-	tpl, err := parseTemplates()
+	tpl, err := parseTemplates("test")
 	if err != nil {
 		t.Fatalf("parse templates: %v", err)
 	}
@@ -211,6 +222,30 @@ func TestTemplatePagesRender(t *testing.T) {
 		"scan_detail": {ScanDetailData{}, sample.scanDetail},
 		"gallery":     {GalleryData{}, sample.gallery},
 		"reports":     {ReportsData{}, sample.reports},
+		"compare": {
+			CompareData{},
+			CompareData{Title: "Compare", ActiveNav: "compare", Scans: sample.scans.Scans},
+		},
+		"schedules": {
+			SchedulesData{},
+			SchedulesData{
+				Title:     "Schedules",
+				ActiveNav: "schedules",
+				Wordlists: WordlistPickerData{
+					IDPrefix:     "sched",
+					UserPath:     "wordlists/default_users.txt",
+					PasswordPath: "wordlists/default_passwords.txt",
+				},
+			},
+		},
+		"about": {
+			AboutData{},
+			AboutData{
+				Title:     "About",
+				ActiveNav: "about",
+				Info:      about.Snapshot("test"),
+			},
+		},
 	}
 
 	for page, datasets := range pages {
@@ -245,6 +280,18 @@ func TestTemplatePagesRender(t *testing.T) {
 					if err := tpl.ExecuteTemplate(&buf, partial, data); err != nil {
 						t.Fatalf("execute %s: %v", partial, err)
 					}
+					if partial == "footer" {
+						out := buf.String()
+						if !strings.Contains(out, about.Developer) {
+							t.Fatalf("footer missing developer credit")
+						}
+						if !strings.Contains(out, about.Email) {
+							t.Fatalf("footer missing developer email")
+						}
+					}
+					if partial == "nav" && !strings.Contains(buf.String(), `href="/about"`) {
+						t.Fatalf("nav missing About link")
+					}
 				})
 			}
 		}
@@ -256,7 +303,7 @@ func TestTemplatePagesRender(t *testing.T) {
 // template shows only the account, not the secret; masking is the second
 // layer of defense.
 func TestScanDetailMasksCredentialSecret(t *testing.T) {
-	tpl, err := parseTemplates()
+	tpl, err := parseTemplates("test")
 	if err != nil {
 		t.Fatalf("parse templates: %v", err)
 	}

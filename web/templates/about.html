@@ -1,0 +1,118 @@
+{{ define "about" }}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="antialiased">
+    {{ template "nav" . }}
+    <main class="page-main">
+      <section class="page-head">
+        <div>
+          <p class="page-eyebrow">Project</p>
+          <h1 class="page-title mt-1">About {{ .Info.ProductTitle }}</h1>
+          <p class="page-subtitle">{{ .Info.Tagline }} for authorized security audits.</p>
+        </div>
+      </section>
+
+      <section class="about-grid" aria-label="Developer and project details">
+        <article class="card about-card">
+          <div class="card-body">
+            <p class="card-eyebrow">Developer</p>
+            <h2 class="card-title">{{ .Info.Developer }}</h2>
+            <p class="card-hint">Primary author and maintainer of {{ .Info.ProductTitle }}.</p>
+            <dl class="about-meta">
+              <div>
+                <dt>Email</dt>
+                <dd><a href="mailto:{{ .Info.Email }}" class="footer-link">{{ .Info.Email }}</a></dd>
+              </div>
+              <div>
+                <dt>GitHub</dt>
+                <dd><a href="{{ .Info.GitHubURL }}" class="footer-link" rel="noopener noreferrer" target="_blank">{{ .Info.GitHubURL }}</a></dd>
+              </div>
+              <div>
+                <dt>LinkedIn</dt>
+                <dd><a href="{{ .Info.LinkedInURL }}" class="footer-link" rel="noopener noreferrer" target="_blank">{{ .Info.LinkedInURL }}</a></dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+
+        <article class="card about-card">
+          <div class="card-body">
+            <p class="card-eyebrow">Build</p>
+            <h2 class="card-title">{{ .Info.Product }} {{ .Info.Version }}</h2>
+            <p class="card-hint">Single-binary RDP audit platform with CLI, REST API and web portal.</p>
+            <dl class="about-meta">
+              <div>
+                <dt>License</dt>
+                <dd>{{ .Info.LicenseName }} ({{ .Info.LicenseID }})</dd>
+              </div>
+              <div>
+                <dt>Copyright</dt>
+                <dd>{{ .Info.Copyright }}</dd>
+              </div>
+              <div>
+                <dt>Use policy</dt>
+                <dd>Only scan systems you are explicitly authorized to test.</dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+      </section>
+
+      <section class="about-grid mt-6" aria-label="Administration">
+        <article class="card about-card">
+          <div class="card-body">
+            <p class="card-eyebrow">Wordlist sets</p>
+            <h2 class="card-title">Named dictionaries</h2>
+            <form id="wordlist-set-form" class="form-stack">
+              <input name="name" class="input" placeholder="Set name" required>
+              <input name="user_path" class="input" placeholder="User wordlist path" required>
+              <input name="password_path" class="input" placeholder="Password wordlist path" required>
+              <button type="submit" class="btn btn-ghost">Add set</button>
+            </form>
+            <ul id="wordlist-set-list" class="about-meta mt-4"></ul>
+          </div>
+        </article>
+        <article class="card about-card">
+          <div class="card-body">
+            <p class="card-eyebrow">Access</p>
+            <h2 class="card-title">Local users</h2>
+            <form id="user-create-form" class="form-stack">
+              <input name="username" class="input" placeholder="Username" required>
+              <input name="password" type="password" class="input" placeholder="Password (min 8)" required>
+              <select name="role" class="input">
+                <option value="viewer">viewer</option>
+                <option value="operator" selected>operator</option>
+                <option value="admin">admin</option>
+              </select>
+              <button type="submit" class="btn btn-ghost">Create user</button>
+            </form>
+            <ul id="user-list" class="about-meta mt-4"></ul>
+            <form id="login-form" class="form-stack mt-4">
+              <p class="card-hint">Login (returns a bearer session token)</p>
+              <input name="username" class="input" placeholder="Username">
+              <input name="password" type="password" class="input" placeholder="Password">
+              <button type="submit" class="btn btn-primary">Login</button>
+              <p id="login-token" class="wordlist-hint"></p>
+            </form>
+          </div>
+        </article>
+      </section>
+
+      <section class="card mt-6">
+        <div class="card-head"><h2 class="card-title">Audit log</h2></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+            <tbody id="audit-log-body"><tr><td colspan="5" class="table-empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
+{{ end }}
