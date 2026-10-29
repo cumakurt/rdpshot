@@ -1,0 +1,179 @@
+{{ define "reports" }}
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="min-h-screen bg-slate-950 text-slate-200 antialiased">
+    {{ template "nav" . }}
+    <main class="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <section class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight text-white">Vulnerability &amp; Reporting Hub</h1>
+          <p class="mt-1 text-sm text-slate-400">Risk distribution, CVE coverage and exportable audit reports.</p>
+        </div>
+        {{ if .LatestScan }}
+        <div class="flex flex-col items-end gap-2">
+          <p class="text-xs text-slate-400">
+            Latest scan:
+            <a href="/scans/{{ .LatestScan.ID }}" class="font-medium text-indigo-400 hover:underline">{{ .LatestScan.Name }}</a>
+          </p>
+          <div class="flex flex-wrap items-center justify-end gap-3">
+            <button type="button" id="export-pdf" data-export data-export-format="pdf"
+              data-export-url="/api/v1/scans/{{ .LatestScan.ID }}/report?format=pdf"
+              class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-semibold text-white transition hover:from-indigo-400 hover:to-violet-400 active:scale-95 disabled:opacity-60">
+              <span class="spinner hidden" data-export-spinner aria-hidden="true"></span>
+              <span data-export-label>Export PDF</span>
+            </button>
+            <button type="button" id="export-html" data-export data-export-format="html"
+              data-export-url="/api/v1/scans/{{ .LatestScan.ID }}/report?format=html"
+              class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-semibold text-white transition hover:from-indigo-400 hover:to-violet-400 active:scale-95 disabled:opacity-60">
+              <span class="spinner hidden" data-export-spinner aria-hidden="true"></span>
+              <span data-export-label>Export HTML</span>
+            </button>
+            <button type="button" id="export-csv" data-export data-export-format="csv"
+              data-export-url="/api/v1/scans/{{ .LatestScan.ID }}/report?format=csv"
+              class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-semibold text-white transition hover:from-indigo-400 hover:to-violet-400 active:scale-95 disabled:opacity-60">
+              <span class="spinner hidden" data-export-spinner aria-hidden="true"></span>
+              <span data-export-label>Export CSV</span>
+            </button>
+          </div>
+        </div>
+        {{ end }}
+      </section>
+
+      <div id="export-error" class="hidden rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300" role="alert"></div>
+
+      <section class="grid grid-cols-2 gap-6 lg:grid-cols-4" aria-label="Summary statistics">
+        <div class="card p-6">
+          <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Total Hosts</p>
+          <p class="mt-2 text-3xl font-bold text-white" data-counter="hosts" data-value="{{ .Summary.HostsTotal }}">{{ .Summary.HostsTotal }}</p>
+          <p class="mt-1 text-xs text-slate-500">{{ .Summary.HostsOpen }} reachable</p>
+        </div>
+        <div class="card p-6">
+          <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Total Findings</p>
+          <p class="mt-2 text-3xl font-bold text-white" data-counter="findings" data-value="{{ .Summary.FindingsTotal }}">{{ .Summary.FindingsTotal }}</p>
+          <p class="mt-1 text-xs text-slate-500">Across {{ .Summary.ScansTotal }} scans</p>
+        </div>
+        <div class="card p-6">
+          <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Valid Credentials</p>
+          <p class="mt-2 text-3xl font-bold text-white" data-counter="creds" data-value="{{ .Summary.CredsTotal }}">{{ .Summary.CredsTotal }}</p>
+          <p class="mt-1 text-xs text-slate-500">Verified authentications</p>
+        </div>
+        <div class="card p-6">
+          <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Screenshots</p>
+          <p class="mt-2 text-3xl font-bold text-white" data-counter="screens" data-value="{{ .Summary.ScreensTotal }}">{{ .Summary.ScreensTotal }}</p>
+          <p class="mt-1 text-xs text-slate-500"><a href="/gallery" class="text-indigo-400 hover:underline">Open vault</a></p>
+        </div>
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div class="card p-6">
+          <h2 class="text-sm font-semibold text-white">Severity Distribution</h2>
+          <div class="mt-4 h-72">
+            <canvas id="risk-chart" aria-label="Severity distribution chart" role="img"></canvas>
+          </div>
+          <script type="application/json" id="risk-data">[{{ range $i, $c := .Summary.BySeverity }}{{ if $i }},{{ end }}{"severity": "{{ $c.Severity }}", "count": {{ $c.Count }} }{{ end }}]</script>
+          {{ if not .Summary.BySeverity }}
+          <p class="mt-4 text-center text-sm text-slate-500">No findings recorded yet.</p>
+          {{ end }}
+        </div>
+
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-white">Top CVEs</h2>
+          {{ if .CVEStats }}
+            {{ range .CVEStats }}
+            <article class="card p-5">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <h3 class="font-mono text-sm font-semibold text-indigo-400">{{ .CVE }}</h3>
+                <span class="badge badge-rose">{{ .Count }} hosts affected</span>
+              </div>
+              <p class="mt-2 text-sm text-slate-200">{{ .Title }}</p>
+              {{ if .Hosts }}
+              <ul class="mt-3 flex flex-wrap gap-2">
+                {{ range .Hosts }}
+                <li class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 font-mono text-xs text-slate-300">{{ . }}</li>
+                {{ end }}
+              </ul>
+              {{ end }}
+              <p class="mt-3 text-xs text-slate-400">
+                <span class="font-semibold text-amber-400">Remediation:</span>
+                apply the vendor security update for this CVE, restrict RDP exposure to trusted management networks, and enforce NLA with strong credentials.
+              </p>
+            </article>
+            {{ end }}
+          {{ else }}
+            <div class="card p-10 text-center text-sm text-slate-500">
+              No CVE statistics available yet.
+            </div>
+          {{ end }}
+        </div>
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div class="card p-6">
+          <h2 class="text-sm font-semibold text-white">Findings by Severity</h2>
+          <div class="mt-4 overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="text-xs uppercase tracking-wider text-slate-500">
+                  <th class="px-3 py-2">Severity</th>
+                  <th class="px-3 py-2">Count</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800">
+                {{ if .Summary.BySeverity }}
+                  {{ range .Summary.BySeverity }}
+                  <tr class="glow-row">
+                    <td class="px-3 py-3">
+                      {{ if eq .Severity "critical" }}<span class="badge badge-rose">{{ .Severity }}</span>{{ else if eq .Severity "high" }}<span class="badge badge-orange">{{ .Severity }}</span>{{ else if eq .Severity "medium" }}<span class="badge badge-amber">{{ .Severity }}</span>{{ else if eq .Severity "low" }}<span class="badge badge-sky">{{ .Severity }}</span>{{ else }}<span class="badge badge-slate">{{ .Severity }}</span>{{ end }}
+                    </td>
+                    <td class="px-3 py-3 font-mono text-white">{{ .Count }}</td>
+                  </tr>
+                  {{ end }}
+                {{ else }}
+                  <tr>
+                    <td colspan="2" class="px-3 py-8 text-center text-sm text-slate-500">No findings recorded yet.</td>
+                  </tr>
+                {{ end }}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card p-6">
+          <h2 class="text-sm font-semibold text-white">CVE Coverage</h2>
+          <div class="mt-4 overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="text-xs uppercase tracking-wider text-slate-500">
+                  <th class="px-3 py-2">CVE</th>
+                  <th class="px-3 py-2">Title</th>
+                  <th class="px-3 py-2">Hosts</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800">
+                {{ if .CVEStats }}
+                  {{ range .CVEStats }}
+                  <tr class="glow-row">
+                    <td class="px-3 py-3 font-mono text-xs text-indigo-400">{{ .CVE }}</td>
+                    <td class="px-3 py-3 text-slate-200">{{ .Title }}</td>
+                    <td class="px-3 py-3 font-mono text-slate-300">{{ .Count }}</td>
+                  </tr>
+                  {{ end }}
+                {{ else }}
+                  <tr>
+                    <td colspan="3" class="px-3 py-8 text-center text-sm text-slate-500">No CVE statistics available yet.</td>
+                  </tr>
+                {{ end }}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
+{{ end }}

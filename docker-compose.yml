@@ -1,0 +1,38 @@
+# rdpshot - RDP security-audit platform
+#
+# AUTHORIZED USE ONLY. Only scan systems you are explicitly authorized to
+# test. Credential checks and screenshot capture are disabled by default and
+# require an explicit authorization acknowledgement (--ack-authorized) before
+# the scanner will attempt any login or capture any session.
+#
+# The default image (target "slim") is a distroless runtime: web UI, scanning
+# and reports work, but in-container screenshot capture does not. For
+# screenshot capture, switch the build target to "full", which ships FreeRDP,
+# Xvfb and ImageMagick.
+
+services:
+  rdpshot:
+    build:
+      context: .
+      target: slim
+      args:
+        VERSION: dev
+    image: rdpshot:latest
+    container_name: rdpshot
+    ports:
+      - "8722:8722"
+    volumes:
+      - rdpshot-data:/data
+    restart: unless-stopped
+    # The container only writes to /data; everything else stays read-only.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    # Set a bearer token when the port is reachable beyond localhost.
+    # environment:
+    #   RDSHOT_TOKEN: change-me
+
+volumes:
+  rdpshot-data:

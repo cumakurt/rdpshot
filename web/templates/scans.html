@@ -1,0 +1,85 @@
+{{ define "scans" }}
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="min-h-screen bg-slate-950 text-slate-200 antialiased">
+    {{ template "nav" . }}
+    <main class="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <section class="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight text-white">Scans</h1>
+          <p class="mt-1 text-sm text-slate-400">Every audit job executed against your authorized RDP estate.</p>
+        </div>
+        <a href="/"
+          class="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-400 active:scale-95">
+          New Scan
+        </a>
+      </section>
+
+      <section class="card p-6">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead>
+              <tr class="text-xs uppercase tracking-wider text-slate-500">
+                <th class="px-3 py-2">Name</th>
+                <th class="px-3 py-2">Status</th>
+                <th class="px-3 py-2">Targets</th>
+                <th class="px-3 py-2">Progress</th>
+                <th class="px-3 py-2">Findings</th>
+                <th class="px-3 py-2">Creds</th>
+                <th class="px-3 py-2">Screens</th>
+                <th class="px-3 py-2">Created</th>
+                <th class="px-3 py-2"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+              {{ if .Scans }}
+                {{ range .Scans }}
+                <tr class="glow-row">
+                  <td class="px-3 py-3">
+                    <a href="/scans/{{ .ID }}" class="font-medium text-white hover:text-indigo-400">{{ .Name }}</a>
+                    <p class="mt-0.5 font-mono text-xs text-slate-500">{{ .ID }}</p>
+                  </td>
+                  <td class="px-3 py-3">
+                    {{ if eq .Status "completed" }}<span class="badge badge-emerald">{{ .Status }}</span>{{ else if eq .Status "running" }}<span class="badge badge-indigo">{{ .Status }}</span>{{ else if eq .Status "failed" }}<span class="badge badge-rose">{{ .Status }}</span>{{ else if eq .Status "cancelled" }}<span class="badge badge-slate">{{ .Status }}</span>{{ else }}<span class="badge badge-amber">{{ .Status }}</span>{{ end }}
+                  </td>
+                  <td class="px-3 py-3 font-mono text-slate-300">{{ len .Options.Targets }}</td>
+                  <td class="px-3 py-3">
+                    <div class="flex items-center gap-2" data-progress data-done="{{ .Progress.Done }}" data-total="{{ .Progress.Total }}" role="progressbar" aria-label="Scan progress">
+                      <div class="progress w-24">
+                        <div class="progress-fill" data-progress-fill></div>
+                      </div>
+                      <span class="whitespace-nowrap font-mono text-xs text-slate-400" data-progress-label>{{ .Progress.Done }}/{{ .Progress.Total }}</span>
+                    </div>
+                  </td>
+                  <td class="px-3 py-3 font-mono text-slate-300">{{ .Progress.Findings }}</td>
+                  <td class="px-3 py-3 font-mono text-emerald-400">{{ .Progress.Creds }}</td>
+                  <td class="px-3 py-3 font-mono text-amber-400">{{ .Progress.Screens }}</td>
+                  <td class="px-3 py-3 text-slate-400">{{ .CreatedAt.Format "2006-01-02 15:04:05" }}</td>
+                  <td class="px-3 py-3 text-right">
+                    <a href="/api/v1/scans/{{ .ID }}/report?format=pdf"
+                      class="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-indigo-500/40 hover:text-indigo-400 active:scale-95">
+                      Report
+                    </a>
+                  </td>
+                </tr>
+                {{ end }}
+              {{ else }}
+                <tr>
+                  <td colspan="9" class="px-3 py-12 text-center text-sm text-slate-500">
+                    No scans recorded yet. Start one from the <a href="/" class="text-indigo-400 hover:underline">Dashboard</a>.
+                  </td>
+                </tr>
+              {{ end }}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
+{{ end }}

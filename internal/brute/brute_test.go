@@ -1,0 +1,209 @@
+package brute
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"rdpshot/internal/model"
+)
+
+type fakeAuth struct {
+	valid     map[string]string
+	lockedFor string
+	calls     []string
+	failWith  error
+}
+
+func (f *fakeAuth) Authenticate(_ context.Context, ep model.Endpoint, cred model.Credential) error {
+	f.calls = append(f.calls, cred.Username+":"+cred.Secret)
+	if f.failWith != nil {
+		return f.failWith
+	}
+	if cred.Username == f.lockedFor {
+		return ErrLockedOut
+	}
+	if f.valid[cred.Username] == cred.Secret {
+		return nil
+	}
+	return ErrInvalidCredential
+}
+
+func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func testCandidates(pairs ...string) []model.Credential {
+	var out []model.Credential
+	for _, pair := range pairs {
+		parts := strings.SplitN(pair, ":", 2)
+		out = append(out, model.Credential{Username: parts[0], Secret: parts[1]})
+	}
+	return out
+}
+
+func TestRunFindsValidCredential(t *testing.T) {
+	auth := &fakeAuth{valid: map[string]string{"admin": "s3cret"}}
+	engine := New(auth, Options{}, Hooks{}, quietLogger())
+	ep := model.Endpoint{Address: "10.0.0.1", Port: 3389}
+
+	result, err := engine.Run(context.Background(), ep, 1, "scan-1",
+		testCandidates("admin:wrong", "admin:s3cret", "admin:never"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(result.Credentials) != 1 || result.Credentials[0].Secret != "s3cret" {
+		t.Fatalf("credentials = %+v", result.Credentials)
+	}
+	if result.Attempts != 2 {
+		t.Fatalf("attempts = %d, want 2 (audit must stop at first success)", result.Attempts)
+	}
+	if result.Credentials[0].ScanID != "scan-1" || result.Credentials[0].HostID != 1 {
+		t.Fatalf("credential not tagged: %+v", result.Credentials[0])
+	}
+}
+
+func TestRunStopsAtFailSafeLimit(t *testing.T) {
+	auth := &fakeAuth{valid: map[string]string{}}
+	engine := New(auth, Options{MaxFailuresPerHost: 2}, Hooks{}, quietLogger())
+	ep := model.Endpoint{Address: "10.0.0.2", Port: 3389}
+
+	result, err := engine.Run(context.Background(), ep, 1, "s",
+		testCandidates("u:1", "u:2", "u:3", "u:4"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.Attempts != 2 || result.Failures != 2 {
+		t.Fatalf("attempts=%d failures=%d, want 2/2", result.Attempts, result.Failures)
+	}
+	if !strings.Contains(result.StoppedReason, "fail-safe") {
+		t.Fatalf("stopped reason = %q", result.StoppedReason)
+	}
+}
+
+func TestRunStopsOnLockout(t *testing.T) {
+	auth := &fakeAuth{valid: map[string]string{}, lockedFor: "admin"}
+	engine := New(auth, Options{MaxFailuresPerHost: 10}, Hooks{}, quietLogger())
+	ep := model.Endpoint{Address: "10.0.0.3", Port: 3389}
+
+	result, err := engine.Run(context.Background(), ep, 1, "s",
+		testCandidates("admin:1", "admin:2", "admin:3"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !result.LockedOut || result.Attempts != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+	if !strings.Contains(result.StoppedReason, "locked") {
+		t.Fatalf("stopped reason = %q", result.StoppedReason)
+	}
+}
+
+func TestRunReportsTransportErrors(t *testing.T) {
+	auth := &fakeAuth{failWith: errors.New("connection reset")}
+	engine := New(auth, Options{}, Hooks{}, quietLogger())
+	ep := model.Endpoint{Address: "10.0.0.4", Port: 3389}
+
+	result, err := engine.Run(context.Background(), ep, 1, "s", testCandidates("u:p"))
+	if err == nil {
+		t.Fatal("expected the transport error to surface")
+	}
+	if result.Attempts != 1 {
+		t.Fatalf("attempts = %d", result.Attempts)
+	}
+}
+
+func TestRunHonoursCancellation(t *testing.T) {
+	auth := &fakeAuth{valid: map[string]string{}}
+	engine := New(auth, Options{MaxFailuresPerHost: 10}, Hooks{}, quietLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, err := engine.Run(ctx, model.Endpoint{Address: "10.0.0.5", Port: 3389}, 1, "s",
+		testCandidates("u:1", "u:2"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if result.Attempts != 0 {
+		t.Fatalf("attempts = %d, want 0", result.Attempts)
+	}
+}
+
+func TestRunCallsHooks(t *testing.T) {
+	auth := &fakeAuth{valid: map[string]string{"admin": "ok"}}
+	var successes, failures int
+	engine := New(auth, Options{}, Hooks{
+		OnSuccess: func(model.Credential) { successes++ },
+		OnFailure: func(model.Credential, error) { failures++ },
+	}, quietLogger())
+
+	_, err := engine.Run(context.Background(), model.Endpoint{Address: "10.0.0.6", Port: 3389}, 1, "s",
+		testCandidates("admin:no", "admin:ok"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("successes=%d failures=%d", successes, failures)
+	}
+}
+
+func TestPauseAddsJitter(t *testing.T) {
+	engine := New(&fakeAuth{}, Options{Delay: 10 * time.Millisecond, Jitter: 5 * time.Millisecond}, Hooks{}, quietLogger())
+	var slept time.Duration
+	engine.sleep = func(d time.Duration) { slept = d }
+	engine.pause()
+	if slept < 10*time.Millisecond || slept > 15*time.Millisecond {
+		t.Fatalf("slept %s, want within [10ms,15ms)", slept)
+	}
+}
+
+func TestLoadWordlist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.txt")
+	content := "# comment\n\nadmin\nuser\nadmin\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	entries, err := LoadWordlist(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(entries) != 2 || entries[0] != "admin" || entries[1] != "user" {
+		t.Fatalf("entries = %v", entries)
+	}
+}
+
+func TestLoadWordlistErrors(t *testing.T) {
+	if _, err := LoadWordlist(filepath.Join(t.TempDir(), "missing.txt")); err == nil {
+		t.Fatal("expected error for missing wordlist")
+	}
+	empty := filepath.Join(t.TempDir(), "empty.txt")
+	if err := os.WriteFile(empty, []byte("# only comments\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := LoadWordlist(empty); err == nil {
+		t.Fatal("expected error for empty wordlist")
+	}
+}
+
+func TestBuildCandidates(t *testing.T) {
+	candidates, err := BuildCandidates([]string{"a", "b"}, []string{"1", "2", "3"})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if len(candidates) != 6 {
+		t.Fatalf("candidates = %d, want 6", len(candidates))
+	}
+	if _, err := BuildCandidates(nil, []string{"1"}); err == nil {
+		t.Fatal("expected error for empty user list")
+	}
+	if _, err := BuildCandidates([]string{"a"}, nil); err == nil {
+		t.Fatal("expected error for empty password list")
+	}
+	if _, err := BuildCandidates(make([]string, 2000), make([]string, 2000)); err == nil {
+		t.Fatal("expected error for oversized candidate list")
+	}
+}

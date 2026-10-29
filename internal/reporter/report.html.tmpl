@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.ToolName}} - RDP Security Assessment Report</title>
+<style>
+:root {
+  --bg: #f4f6f8;
+  --card: #ffffff;
+  --ink: #1f2933;
+  --muted: #616e7c;
+  --line: #d9e2ec;
+  --accent: #2980b9;
+  --critical: #a93226;
+  --high: #c0392b;
+  --medium: #b9770e;
+  --low: #1e8449;
+  --info: #2e86c1;
+  --unknown: #7f8c8d;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.page-header {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+.page-header h1 { margin: 0 0 4px; font-size: 24px; }
+.subtitle { margin: 0 0 12px; color: var(--muted); }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 32px; margin: 0; }
+.meta dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.meta dd { margin: 0; font-weight: 600; }
+section { margin-bottom: 28px; }
+h2 {
+  font-size: 17px;
+  margin: 0 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--accent);
+}
+.cards { display: flex; flex-wrap: wrap; gap: 12px; }
+.card {
+  flex: 1 1 140px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.card-value { display: block; font-size: 26px; font-weight: 700; }
+.card-label { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+.card.sev-critical .card-value { color: var(--critical); }
+.card.sev-high .card-value { color: var(--high); }
+.card.sev-medium .card-value { color: var(--medium); }
+.card.sev-low .card-value { color: var(--low); }
+.card.sev-info .card-value { color: var(--info); }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+th, td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: #eaf2f8;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+tbody tr:last-child td { border-bottom: none; }
+td.wrap { max-width: 320px; overflow-wrap: anywhere; }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.badge.sev-critical { background: var(--critical); }
+.badge.sev-high { background: var(--high); }
+.badge.sev-medium { background: var(--medium); }
+.badge.sev-low { background: var(--low); }
+.badge.sev-info { background: var(--info); }
+.badge.sev-unknown { background: var(--unknown); }
+footer {
+  color: var(--muted);
+  font-size: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+</style>
+</head>
+<body>
+<header class="page-header">
+  <h1>RDP Security Assessment Report</h1>
+  <p class="subtitle">{{.ToolName}} {{.ToolVersion}}</p>
+  <dl class="meta">
+    <div><dt>Scan</dt><dd>{{.Scan.Name}}</dd></div>
+    <div><dt>Scan ID</dt><dd>{{.Scan.ID}}</dd></div>
+    <div><dt>Scope</dt><dd>{{.Scan.Scope}}</dd></div>
+    <div><dt>Generated At</dt><dd>{{.GeneratedAt}}</dd></div>
+  </dl>
+</header>
+<main>
+<section id="summary">
+  <h2>Executive Summary</h2>
+  <div class="cards">
+    {{range .Cards}}<div class="card {{.Class}}">
+      <span class="card-value">{{.Value}}</span>
+      <span class="card-label">{{.Label}}</span>
+    </div>
+    {{end}}
+  </div>
+</section>
+<section id="severity">
+  <h2>Severity Distribution</h2>
+  <table>
+    <thead>
+      <tr><th>Severity</th><th>Findings</th></tr>
+    </thead>
+    <tbody>
+      {{range .Severity}}<tr>
+        <td><span class="badge {{.Class}}">{{.Severity}}</span></td>
+        <td>{{.Count}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+<section id="findings">
+  <h2>Findings</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Severity</th><th>Check ID</th><th>Title</th><th>CVE</th><th>CVSS</th>
+        <th>Status</th><th>Host</th><th>Evidence</th><th>Remediation</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Findings}}<tr>
+        <td><span class="badge {{.SeverityClass}}">{{.Severity}}</span></td>
+        <td>{{.CheckID}}</td>
+        <td>{{.Title}}</td>
+        <td>{{.CVE}}</td>
+        <td>{{.CVSS}}</td>
+        <td>{{.Status}}</td>
+        <td>{{.HostPort}}</td>
+        <td class="wrap">{{.Evidence}}</td>
+        <td class="wrap">{{.Remediation}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+<section id="hosts">
+  <h2>Hosts</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Address</th><th>Port</th><th>State</th><th>NLA</th>
+        <th>Negotiated Protocol</th><th>TLS Version</th>
+        <th>Certificate (Subject / Self-Signed)</th><th>OS Guess</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Hosts}}<tr>
+        <td>{{.Address}}</td>
+        <td>{{.Port}}</td>
+        <td>{{.State}}</td>
+        <td>{{.NLA}}</td>
+        <td>{{.Protocol}}</td>
+        <td>{{.TLSVersion}}</td>
+        <td class="wrap">{{.Certificate}}</td>
+        <td>{{.OSGuess}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+<section id="credentials">
+  <h2>Credentials</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Host</th><th>Domain</th><th>Username</th><th>Secret</th>
+        <th>Method</th><th>Verified At</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Credentials}}<tr>
+        <td>{{.HostPort}}</td>
+        <td>{{.Domain}}</td>
+        <td>{{.Username}}</td>
+        <td>{{.Secret}}</td>
+        <td>{{.Method}}</td>
+        <td>{{.VerifiedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+<section id="screenshots">
+  <h2>Screenshots</h2>
+  <table>
+    <thead>
+      <tr><th>File Path</th><th>Host</th><th>User</th><th>Captured At</th></tr>
+    </thead>
+    <tbody>
+      {{range .Screenshots}}<tr>
+        <td class="wrap">{{.FilePath}}</td>
+        <td>{{.HostPort}}</td>
+        <td>{{.Username}}</td>
+        <td>{{.CapturedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+</main>
+<footer>Generated by {{.ToolName}} {{.ToolVersion}} at {{.GeneratedAt}}</footer>
+</body>
+</html>

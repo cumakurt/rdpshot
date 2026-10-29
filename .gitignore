@@ -1,0 +1,10 @@
+bin/
+outputs/
+/rdpshot
+*.db
+*.db-wal
+*.db-shm
+*.png
+.idea/
+.vscode/
+*.log

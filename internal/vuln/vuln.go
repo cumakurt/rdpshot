@@ -1,0 +1,247 @@
+// Package vuln evaluates reconnaissance results against the RDP vulnerability
+// and misconfiguration catalog.
+package vuln
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"rdpshot/internal/model"
+	"rdpshot/internal/rdp"
+)
+
+// Input is everything the checks need about one endpoint.
+type Input struct {
+	// Service is the fingerprint gathered by the reconnaissance probe.
+	Service *model.ServiceInfo
+	// BlueKeep is the outcome of the safe CVE-2019-0708 detection probe and
+	// may be nil when the probe was not requested or not possible.
+	BlueKeep *rdp.BlueKeepResult
+}
+
+type check struct {
+	id          string
+	title       string
+	severity    model.Severity
+	cve         string
+	cvss        float64
+	remediation string
+	// evaluate returns the finding status and evidence. An empty status skips
+	// the finding entirely (used when a condition is clearly not present).
+	evaluate func(in Input) (model.FindingStatus, string)
+}
+
+// catalog returns the ordered check definitions.
+func catalog() []check {
+	return []check{
+		{
+			id:          "rdp-service-exposed",
+			title:       "Remote Desktop service exposed",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Expose RDP only through a VPN, RD Gateway or an allow-list; restrict network access to trusted sources.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				return model.FindingVulnerable, "TCP port accepted an RDP connection"
+			},
+		},
+		{
+			id:          "nla-not-required",
+			title:       "Network Level Authentication (NLA) is not enforced",
+			severity:    model.SeverityHigh,
+			cvss:        7.5,
+			remediation: "Require NLA: set 'User Authentication must be required for remote connections' (fDenyTSConnections / RequireNLA policy).",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service.NLARequired {
+					return model.FindingNotVulnerable, "server requires CredSSP/NLA before the session is established"
+				}
+				return model.FindingVulnerable,
+					"negotiation selected " + rdp.ProtocolName(in.Service.NegotiatedProtocol) + " without NLA"
+			},
+		},
+		{
+			id:          "rdp-security-without-tls",
+			title:       "Legacy RDP security layer negotiated without TLS",
+			severity:    model.SeverityMedium,
+			cvss:        5.3,
+			remediation: "Configure the RDP listener to use TLS (Security Layer = Negotiate or SSL) and disable the legacy RDP security layer.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service.NegotiatedProtocol != rdp.ProtocolRDP {
+					return "", ""
+				}
+				return model.FindingVulnerable,
+					fmt.Sprintf("selected protocol is %s (encryption level: %s)",
+						rdp.ProtocolName(in.Service.NegotiatedProtocol), in.Service.EncryptionLevel)
+			},
+		},
+		{
+			id:          "bluekeep-cve-2019-0708",
+			title:       "BlueKeep pre-auth RCE in RDS (CVE-2019-0708)",
+			severity:    model.SeverityCritical,
+			cve:         "CVE-2019-0708",
+			cvss:        9.8,
+			remediation: "Apply the security update for CVE-2019-0708 or disable RDP on the host. Enabling NLA blocks pre-auth exploitation but does not fix the bug.",
+			evaluate:    evaluateBlueKeep,
+		},
+		{
+			id:          "dejablue-cve-2019-1181-1182",
+			title:       "Possible DejaBlue RDS vulnerabilities (CVE-2019-1181/1182)",
+			severity:    model.SeverityCritical,
+			cve:         "CVE-2019-1182",
+			cvss:        9.8,
+			remediation: "Apply the August 2019 cumulative update (or later) and enforce NLA. Verify the patch state locally; remote detection is not conclusive.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service.NLARequired {
+					return "", ""
+				}
+				return model.FindingPotential,
+					"RDP is reachable without NLA; DejaBlue affects unpatched Windows 7/Server 2008 R2 through Server 2019 and cannot be confirmed remotely. Verify the patch level."
+			},
+		},
+		{
+			id:          "weak-encryption",
+			title:       "Weak or disabled RDP encryption",
+			severity:    model.SeverityHigh,
+			cvss:        7.5,
+			remediation: "Set the RDP encryption level to 'High' or 'FIPS Compliant' and disable 40/56-bit RC4 methods.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				level := strings.ToLower(in.Service.EncryptionLevel)
+				if level == "" {
+					return "", ""
+				}
+				switch level {
+				case "none", "low":
+					return model.FindingVulnerable,
+						fmt.Sprintf("encryption level is %q (methods 0x%08x)", in.Service.EncryptionLevel, in.Service.EncryptionMethods)
+				case "client_compatible":
+					if in.Service.EncryptionMethods != 0 && in.Service.EncryptionMethods&0x0000000B == in.Service.EncryptionMethods &&
+						in.Service.EncryptionMethods&0x00000002 == 0 {
+						return model.FindingVulnerable,
+							fmt.Sprintf("only legacy RC4 key lengths negotiated (methods 0x%08x)", in.Service.EncryptionMethods)
+					}
+					return model.FindingPotential,
+						fmt.Sprintf("encryption level is client compatible (methods 0x%08x)", in.Service.EncryptionMethods)
+				}
+				return "", ""
+			},
+		},
+		{
+			id:          "weak-tls",
+			title:       "Obsolete TLS version or weak cipher suite",
+			severity:    model.SeverityMedium,
+			cvss:        5.3,
+			remediation: "Disable TLS 1.0/1.1 and SSL 3.0 on the RDP listener and remove RC4/3DES cipher suites.",
+			evaluate:    evaluateWeakTLS,
+		},
+		{
+			id:          "self-signed-cert",
+			title:       "Self-signed certificate on the RDP listener",
+			severity:    model.SeverityMedium,
+			cvss:        4.3,
+			remediation: "Deploy a certificate issued by a trusted CA (or an internal PKI) for the RDP listener so clients can authenticate the server.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				cert := in.Service.Certificate
+				if cert == nil || !cert.SelfSigned {
+					return "", ""
+				}
+				return model.FindingVulnerable,
+					fmt.Sprintf("certificate subject %q is issued by itself (SHA-256 %s)", cert.Subject, cert.Fingerprint)
+			},
+		},
+		{
+			id:          "expired-cert",
+			title:       "Expired certificate on the RDP listener",
+			severity:    model.SeverityMedium,
+			cvss:        4.3,
+			remediation: "Replace the expired certificate on the RDP listener and automate renewal.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				cert := in.Service.Certificate
+				if cert == nil || cert.NotAfter.IsZero() {
+					return "", ""
+				}
+				now := time.Now()
+				if now.After(cert.NotAfter) {
+					return model.FindingVulnerable,
+						fmt.Sprintf("certificate expired on %s (subject %q)", cert.NotAfter.Format(time.RFC3339), cert.Subject)
+				}
+				if cert.NotAfter.Sub(now) < 30*24*time.Hour {
+					return model.FindingPotential,
+						fmt.Sprintf("certificate expires on %s (subject %q)", cert.NotAfter.Format(time.RFC3339), cert.Subject)
+				}
+				return "", ""
+			},
+		},
+	}
+}
+
+func evaluateBlueKeep(in Input) (model.FindingStatus, string) {
+	switch {
+	case in.BlueKeep == nil:
+		if in.Service.NLARequired {
+			return model.FindingPotential,
+				"NLA is enforced, which blocks pre-auth exploitation; the underlying bug may still be unpatched. Verify the update state."
+		}
+		return model.FindingInconclusive,
+			"MS_T120 detection probe was not executed for this endpoint"
+	case in.BlueKeep.Attempted && in.BlueKeep.Triggered:
+		return model.FindingVulnerable,
+			in.BlueKeep.Reason + " (" + in.BlueKeep.Evidence + ")"
+	case in.BlueKeep.Attempted:
+		return model.FindingNotVulnerable,
+			in.BlueKeep.Reason + " (" + in.BlueKeep.Evidence + ")"
+	default:
+		return model.FindingInconclusive,
+			in.BlueKeep.Reason + " (" + in.BlueKeep.Evidence + ")"
+	}
+}
+
+func evaluateWeakTLS(in Input) (model.FindingStatus, string) {
+	if in.Service.TLSVersion == "" {
+		return "", ""
+	}
+	var issues []string
+	switch in.Service.TLSVersion {
+	case "SSL 3.0", "TLS 1.0", "TLS 1.1":
+		issues = append(issues, "negotiated "+in.Service.TLSVersion)
+	}
+	suite := strings.ToUpper(in.Service.TLSCipherSuite)
+	for _, weak := range []string{"RC4", "3DES", "_NULL_", "EXPORT", "_anon_", "DES_"} {
+		if strings.Contains(suite, weak) {
+			issues = append(issues, "weak cipher suite "+in.Service.TLSCipherSuite)
+			break
+		}
+	}
+	if len(issues) == 0 {
+		return "", ""
+	}
+	return model.FindingVulnerable, strings.Join(issues, "; ")
+}
+
+// Evaluate runs every applicable check against one endpoint and returns the
+// findings. Conditions that are clearly absent are not reported; checks with
+// security relevance (for example BlueKeep) are always reported so the report
+// documents both confirmed and ruled-out risk.
+func Evaluate(ep model.Endpoint, in Input) []model.Finding {
+	var findings []model.Finding
+	now := time.Now().UTC()
+	for _, c := range catalog() {
+		status, evidence := c.evaluate(in)
+		if status == "" {
+			continue
+		}
+		findings = append(findings, model.Finding{
+			Address:     ep.Address,
+			Port:        ep.Port,
+			CheckID:     c.id,
+			Title:       c.title,
+			Severity:    c.severity,
+			Status:      status,
+			CVE:         c.cve,
+			CVSS:        c.cvss,
+			Evidence:    evidence,
+			Remediation: c.remediation,
+			DetectedAt:  now,
+		})
+	}
+	return findings
+}

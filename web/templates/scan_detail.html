@@ -1,0 +1,261 @@
+{{ define "scan_detail" }}
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="min-h-screen bg-slate-950 text-slate-200 antialiased" data-scan-id="{{ .Scan.ID }}">
+    {{ template "nav" . }}
+    <main class="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <section class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p class="font-mono text-xs uppercase tracking-widest text-slate-500">Scan <span class="text-indigo-400">{{ .Scan.ID }}</span></p>
+          <h1 class="mt-1 text-2xl font-bold tracking-tight text-white">{{ .Scan.Name }}</h1>
+          <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-400">
+            {{ if eq .Scan.Status "completed" }}<span class="badge badge-emerald">{{ .Scan.Status }}</span>{{ else if eq .Scan.Status "running" }}<span class="badge badge-indigo">{{ .Scan.Status }}</span>{{ else if eq .Scan.Status "failed" }}<span class="badge badge-rose">{{ .Scan.Status }}</span>{{ else if eq .Scan.Status "cancelled" }}<span class="badge badge-slate">{{ .Scan.Status }}</span>{{ else }}<span class="badge badge-amber">{{ .Scan.Status }}</span>{{ end }}
+            <span>Created {{ .Scan.CreatedAt.Format "2006-01-02 15:04:05" }}</span>
+            {{ if .Scan.StartedAt }}<span>Started {{ .Scan.StartedAt.Format "2006-01-02 15:04:05" }}</span>{{ end }}
+            {{ if .Scan.FinishedAt }}<span>Finished {{ .Scan.FinishedAt.Format "2006-01-02 15:04:05" }}</span>{{ end }}
+            {{ if .Scan.Error }}<span class="text-rose-400">{{ .Scan.Error }}</span>{{ end }}
+          </div>
+        </div>
+        <button type="button" data-cancel-scan="{{ .Scan.ID }}"
+          class="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-300 transition hover:border-rose-500/60 hover:bg-rose-500/20 active:scale-95">
+          Cancel Scan
+        </button>
+      </section>
+
+      <section class="card p-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-sm font-semibold text-white">Progress</h2>
+          <div class="flex items-center gap-4 font-mono text-xs text-slate-400">
+            {{ if .Scan.StartedAt }}
+            <span id="elapsed-ticker"
+              data-elapsed-start="{{ .Scan.StartedAt.Format "2006-01-02T15:04:05Z07:00" }}"
+              {{ if .Scan.FinishedAt }}data-elapsed-end="{{ .Scan.FinishedAt.Format "2006-01-02T15:04:05Z07:00" }}"{{ end }}>elapsed 0s</span>
+            {{ end }}
+            <span id="scan-progress-label" class="text-slate-300" data-progress-label>{{ .Scan.Progress.Done }}/{{ .Scan.Progress.Total }}</span>
+          </div>
+        </div>
+
+        <div id="scan-progress" class="mt-4" data-progress data-done="{{ .Scan.Progress.Done }}" data-total="{{ .Scan.Progress.Total }}"
+          role="progressbar" aria-label="Scan progress" aria-valuemin="0" aria-valuemax="{{ .Scan.Progress.Total }}" aria-valuenow="{{ .Scan.Progress.Done }}">
+          <div class="progress progress-lg">
+            <div class="progress-fill" data-progress-fill></div>
+          </div>
+        </div>
+
+        <dl class="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-8">
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-slate-500">Total</dt>
+            <dd class="mt-1 text-xl font-bold text-white" data-counter="total" data-value="{{ .Scan.Progress.Total }}">{{ .Scan.Progress.Total }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-slate-500">Done</dt>
+            <dd class="mt-1 text-xl font-bold text-white" data-counter="done" data-value="{{ .Scan.Progress.Done }}">{{ .Scan.Progress.Done }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-slate-500">Open</dt>
+            <dd class="mt-1 text-xl font-bold text-emerald-400" data-counter="open" data-value="{{ .Scan.Progress.Open }}">{{ .Scan.Progress.Open }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-slate-500">Closed</dt>
+            <dd class="mt-1 text-xl font-bold text-slate-400" data-counter="closed" data-value="{{ .Scan.Progress.Closed }}">{{ .Scan.Progress.Closed }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-slate-500">Findings</dt>
+            <dd class="mt-1 text-xl font-bold text-rose-400" data-counter="findings" data-value="{{ .Scan.Progress.Findings }}">{{ .Scan.Progress.Findings }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-slate-500">Creds</dt>
+            <dd class="mt-1 text-xl font-bold text-emerald-400" data-counter="creds" data-value="{{ .Scan.Progress.Creds }}">{{ .Scan.Progress.Creds }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-slate-500">Screens</dt>
+            <dd class="mt-1 text-xl font-bold text-amber-400" data-counter="screens" data-value="{{ .Scan.Progress.Screens }}">{{ .Scan.Progress.Screens }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-slate-500">Active Jobs</dt>
+            <dd class="mt-1 text-xl font-bold text-indigo-400" data-counter="active" data-value="{{ .Scan.Progress.ActiveJobs }}">{{ .Scan.Progress.ActiveJobs }}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 lg:grid-cols-5">
+        <div class="card p-6 lg:col-span-3">
+          <h2 class="text-sm font-semibold text-white">Findings</h2>
+          <div class="mt-4 overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="text-xs uppercase tracking-wider text-slate-500">
+                  <th class="px-3 py-2">Address</th>
+                  <th class="px-3 py-2">Port</th>
+                  <th class="px-3 py-2">Title</th>
+                  <th class="px-3 py-2">Severity</th>
+                  <th class="px-3 py-2">Status</th>
+                  <th class="px-3 py-2">CVE</th>
+                  <th class="px-3 py-2"><span class="sr-only">Details</span></th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800" x-data="{ openRow: -1 }">
+                {{ if .Findings }}
+                  {{ range $i, $f := .Findings }}
+                  <tr class="glow-row cursor-pointer" @click="openRow = openRow === {{ $i }} ? -1 : {{ $i }}">
+                    <td class="px-3 py-3 font-mono text-white">{{ $f.Address }}</td>
+                    <td class="px-3 py-3 font-mono text-slate-400">{{ $f.Port }}</td>
+                    <td class="px-3 py-3">
+                      <p class="font-medium text-white">{{ $f.Title }}</p>
+                      <p class="mt-0.5 font-mono text-xs text-slate-500">{{ $f.CheckID }}</p>
+                    </td>
+                    <td class="px-3 py-3">
+                      {{ if eq $f.Severity "critical" }}<span class="badge badge-rose">{{ $f.Severity }}</span>{{ else if eq $f.Severity "high" }}<span class="badge badge-orange">{{ $f.Severity }}</span>{{ else if eq $f.Severity "medium" }}<span class="badge badge-amber">{{ $f.Severity }}</span>{{ else if eq $f.Severity "low" }}<span class="badge badge-sky">{{ $f.Severity }}</span>{{ else }}<span class="badge badge-slate">{{ $f.Severity }}</span>{{ end }}
+                    </td>
+                    <td class="px-3 py-3 text-slate-300">{{ $f.Status }}</td>
+                    <td class="px-3 py-3 font-mono text-xs text-slate-400">
+                      {{ if $f.CVE }}{{ $f.CVE }}{{ else }}<span class="text-slate-600">&mdash;</span>{{ end }}
+                    </td>
+                    <td class="px-3 py-3 text-right">
+                      <button type="button" class="rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 transition hover:border-indigo-500/40 hover:text-indigo-400"
+                        @click.stop="openRow = openRow === {{ $i }} ? -1 : {{ $i }}"
+                        :aria-expanded="openRow === {{ $i }} ? 'true' : 'false'">
+                        Details
+                      </button>
+                    </td>
+                  </tr>
+                  <tr x-show="openRow === {{ $i }}" x-cloak>
+                    <td colspan="7" class="px-3 py-4">
+                      <div class="space-y-3 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+                        <div>
+                          <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Evidence</h3>
+                          <pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs text-slate-300">{{ $f.Evidence }}</pre>
+                        </div>
+                        <div>
+                          <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Remediation</h3>
+                          <p class="mt-1 text-sm text-slate-300">{{ $f.Remediation }}</p>
+                        </div>
+                        <p class="text-xs text-slate-500">
+                          CVSS {{ $f.CVSS }} · Detected {{ $f.DetectedAt.Format "2006-01-02 15:04:05" }}
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                  {{ end }}
+                {{ else }}
+                  <tr>
+                    <td colspan="7" class="px-3 py-10 text-center text-sm text-slate-500">
+                      No findings recorded for this scan.
+                    </td>
+                  </tr>
+                {{ end }}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="space-y-6 lg:col-span-2">
+          <div class="card p-6">
+            <h2 class="text-sm font-semibold text-white">Verified Credentials</h2>
+            {{ if .Creds }}
+            <ul class="mt-3 space-y-3">
+              {{ range .Creds }}
+              <li class="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <p class="font-mono text-sm text-white">
+                  {{ if .Domain }}{{ .Domain }}\{{ end }}{{ .Username }}
+                </p>
+                <p class="mt-1 text-xs text-slate-400">{{ .Address }}:{{ .Port }} · {{ .Method }}</p>
+                <p class="mt-0.5 text-xs text-slate-500">Verified {{ .VerifiedAt.Format "2006-01-02 15:04:05" }}</p>
+              </li>
+              {{ end }}
+            </ul>
+            {{ else }}
+            <p class="mt-3 text-sm text-slate-500">No valid credentials were verified in this scan.</p>
+            {{ end }}
+          </div>
+
+          <div class="card p-6">
+            <h2 class="text-sm font-semibold text-white">Screenshots</h2>
+            {{ if .Screens }}
+            <ul class="mt-3 space-y-3">
+              {{ range .Screens }}
+              <li class="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <p class="font-mono text-sm text-white">{{ .Address }}:{{ .Port }}</p>
+                <p class="mt-1 text-xs text-slate-400">user: {{ .Username }} · {{ .Width }}x{{ .Height }}</p>
+                <p class="mt-0.5 text-xs text-slate-500">Captured {{ .CapturedAt.Format "2006-01-02 15:04:05" }}</p>
+              </li>
+              {{ end }}
+            </ul>
+            {{ else }}
+            <p class="mt-3 text-sm text-slate-500">No session screenshots captured yet.</p>
+            {{ end }}
+          </div>
+        </div>
+      </section>
+
+      <section class="card p-6">
+        <h2 class="text-sm font-semibold text-white">Discovered Hosts</h2>
+        <div class="mt-4 overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead>
+              <tr class="text-xs uppercase tracking-wider text-slate-500">
+                <th class="px-3 py-2">Address</th>
+                <th class="px-3 py-2">Port</th>
+                <th class="px-3 py-2">State</th>
+                <th class="px-3 py-2">NLA</th>
+                <th class="px-3 py-2">Protocol</th>
+                <th class="px-3 py-2">TLS</th>
+                <th class="px-3 py-2">Cert Subject</th>
+                <th class="px-3 py-2">OS Guess</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+              {{ if .Hosts }}
+                {{ range .Hosts }}
+                <tr class="glow-row">
+                  <td class="px-3 py-3 font-mono text-white">{{ .Endpoint.Address }}</td>
+                  <td class="px-3 py-3 font-mono text-slate-400">{{ .Endpoint.Port }}</td>
+                  <td class="px-3 py-3">
+                    {{ if eq .State "open" }}<span class="badge badge-emerald">{{ .State }}</span>{{ else if eq .State "closed" }}<span class="badge badge-slate">{{ .State }}</span>{{ else }}<span class="badge badge-amber">{{ .State }}</span>{{ end }}
+                  </td>
+                  <td class="px-3 py-3">
+                    {{ if .Service }}
+                      {{ if .Service.NLARequired }}<span class="badge badge-sky">required</span>{{ else }}<span class="badge badge-slate">not required</span>{{ end }}
+                    {{ else }}<span class="text-slate-600">&mdash;</span>{{ end }}
+                  </td>
+                  <td class="px-3 py-3 font-mono text-xs text-slate-300">
+                    {{ if .Service }}{{ printf "0x%08X" .Service.NegotiatedProtocol }}{{ else }}<span class="text-slate-600">&mdash;</span>{{ end }}
+                  </td>
+                  <td class="px-3 py-3 font-mono text-xs text-slate-300">
+                    {{ if .Service }}{{ .Service.TLSVersion }}{{ else }}<span class="text-slate-600">&mdash;</span>{{ end }}
+                  </td>
+                  <td class="px-3 py-3 text-slate-300">
+                    {{ if .Service }}
+                      {{ if .Service.Certificate }}
+                        {{ .Service.Certificate.Subject }}
+                        {{ if .Service.Certificate.SelfSigned }}<span class="badge badge-rose ml-1">self-signed</span>{{ end }}
+                      {{ else }}<span class="text-slate-600">&mdash;</span>{{ end }}
+                    {{ else }}<span class="text-slate-600">&mdash;</span>{{ end }}
+                  </td>
+                  <td class="px-3 py-3 text-slate-300">
+                    {{ if .Service }}
+                      {{ if .Service.OSGuess }}{{ .Service.OSGuess }}{{ else }}<span class="text-slate-600">&mdash;</span>{{ end }}
+                    {{ else }}<span class="text-slate-600">&mdash;</span>{{ end }}
+                  </td>
+                </tr>
+                {{ end }}
+              {{ else }}
+                <tr>
+                  <td colspan="8" class="px-3 py-10 text-center text-sm text-slate-500">
+                    No hosts probed yet.
+                  </td>
+                </tr>
+              {{ end }}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
+{{ end }}

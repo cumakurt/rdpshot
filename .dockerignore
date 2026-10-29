@@ -1,0 +1,12 @@
+.git
+.gitignore
+outputs/
+bin/
+docs/
+.idea/
+.vscode/
+*.db
+*.db-wal
+*.db-shm
+*.png
+*.log

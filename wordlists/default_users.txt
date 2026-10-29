@@ -1,0 +1,48 @@
+# rdpshot default username wordlist
+#
+# For AUTHORIZED security audits only. Use this list solely against systems
+# you are explicitly permitted to test.
+#
+# These are well-known account names that default or poorly maintained Windows
+# deployments still ship with. Real systems must change or disable these
+# accounts; their presence here is a finding, not a recommendation.
+#
+# One entry per line. Blank lines and lines starting with "#" are ignored.
+
+# Built-in and administrative accounts
+Administrator
+admin
+DefaultAccount
+sysadmin
+root
+
+# Common hand-made names
+user
+guest
+test
+demo
+student
+lab
+
+# Service and operations accounts
+service
+operator
+support
+helpdesk
+help
+manager
+audit
+backup
+sql
+oracle
+dbadmin
+
+# Web and remote-access accounts
+web
+www
+ftpuser
+iis
+tsuser
+remote
+deploy
+developer
