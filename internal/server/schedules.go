@@ -25,7 +25,7 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []model.Schedule{}
 	}
-	s.writeJSON(w, http.StatusOK, items)
+	s.writeJSON(w, http.StatusOK, redactSchedules(items))
 }
 
 // handleGetSchedule returns one schedule.
@@ -34,7 +34,7 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.writeJSON(w, http.StatusOK, sch)
+	s.writeJSON(w, http.StatusOK, redactSchedule(sch))
 }
 
 // handleCreateSchedule registers a new recurring scan.
@@ -101,7 +101,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "create schedule", err)
 		return
 	}
-	s.writeJSON(w, http.StatusCreated, sch)
+	s.writeJSON(w, http.StatusCreated, redactSchedule(sch))
 }
 
 // handleUpdateSchedule patches enabled/name/interval fields of a schedule.
@@ -201,7 +201,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "update schedule", err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, sch)
+	s.writeJSON(w, http.StatusOK, redactSchedule(sch))
 }
 
 // handleDeleteSchedule removes a recurring scan definition.
@@ -283,15 +283,6 @@ func (s *Server) parseScheduleForm(form map[string][]string, uploadedTargets []s
 
 	userWordlist := strings.TrimSpace(get("user_wordlist"))
 	passwordWordlist := strings.TrimSpace(get("password_wordlist"))
-	if enableAuth {
-		defaultUser, defaultPassword := s.wordlistDefaults()
-		if userWordlist == "" {
-			userWordlist = defaultUser
-		}
-		if passwordWordlist == "" {
-			passwordWordlist = defaultPassword
-		}
-	}
 
 	name := strings.TrimSpace(get("name"))
 	if name == "" {
@@ -314,6 +305,21 @@ func (s *Server) parseScheduleForm(form map[string][]string, uploadedTargets []s
 		UserWordlist:     userWordlist,
 		PasswordWordlist: passwordWordlist,
 		Acknowledged:     ack,
+	}
+	if err := applyAuthOptions(&opts, get); err != nil {
+		return model.ScanOptions{}, 0, "", err
+	}
+	if opts.EnableAuth && !ack {
+		return model.ScanOptions{}, 0, "", errors.New("credential checks and screenshots require the authorization acknowledgement")
+	}
+	if opts.EnableAuth && opts.AuthMode == model.AuthModeWordlist {
+		defaultUser, defaultPassword := s.wordlistDefaults()
+		if opts.UserWordlist == "" {
+			opts.UserWordlist = defaultUser
+		}
+		if opts.PasswordWordlist == "" {
+			opts.PasswordWordlist = defaultPassword
+		}
 	}
 	return opts, interval, name, nil
 }

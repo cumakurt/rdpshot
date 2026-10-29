@@ -182,6 +182,27 @@ rdpshot scan --enable-auth --enable-screens --ack-authorized \
   10.0.0.0/24
 ```
 
+Single credential or pass-the-hash (also require `--ack-authorized`; these modes
+imply `--enable-auth` and auto-enable screenshots):
+
+```sh
+rdpshot scan --ack-authorized --auth-mode=single \
+  --auth-user alice --auth-domain CORP --auth-password '...' \
+  10.0.0.10
+
+rdpshot scan --ack-authorized --auth-mode=pth \
+  --auth-user bob --auth-nthash a4f49c406510bdcab6824ee7c30fd852 \
+  10.0.0.10
+```
+
+On a successful single/PTH login the tool captures a screenshot and
+**disconnects immediately** (no lingering interactive session).
+
+`--auth-domain` sets the default domain for wordlist, single, and PTH modes.
+Wordlist lines may still embed `DOMAIN\user` or `user@domain` (those win).
+`--auth-nthash` accepts a 32-character hex NT hash or an `LM:NT` pair. PTH
+session screenshots use the Go framebuffer path only (FreeRDP is skipped).
+
 Generate a PDF report for a finished scan:
 
 ```sh
@@ -200,7 +221,7 @@ Flags must come before the target specifications. Targets are one or more of:
 
 | Command | Purpose | Key flags |
 |---|---|---|
-| `scan` | Run a scan in the foreground | `--name`, `--ports` (default `3389`), `--blacklist`, `--concurrency`, `--rate`, `--timeout`, `--max-targets`, `--max-auth-failures`, `--enable-vuln` (default on), `--enable-auth`, `--enable-screens`, `--ack-authorized`, `--user-wordlist`, `--password-wordlist`, `--report none\|html\|csv\|pdf`, `--report-dir`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format` |
+| `scan` | Run a scan in the foreground | `--name`, `--ports` (default `3389`), `--blacklist`, `--concurrency`, `--rate`, `--timeout`, `--max-targets`, `--max-auth-failures`, `--enable-vuln` (default on), `--enable-auth`, `--enable-screens`, `--ack-authorized`, `--user-wordlist`, `--password-wordlist`, `--auth-mode wordlist\|single\|pth`, `--auth-user`, `--auth-domain` (all modes), `--auth-password`, `--auth-nthash`, `--report none\|html\|csv\|pdf`, `--report-dir`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format` |
 | `serve` | Start the web UI and REST API | `--addr` (default `127.0.0.1:8722`), `--token`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format`, `--user-wordlist`, `--password-wordlist`, `--max-auth-failures`, `--max-targets`, `--max-concurrent-scans` (default `2`) |
 | `report` | Render a stored scan into a report | `--scan <id>` (required), `--format html\|csv\|pdf`, `-o/--output`, `--db` |
 | `policy check` | CI gate against a stored scan | `--scan <id>` (required), `--db`, `--policy path.json` (optional) |

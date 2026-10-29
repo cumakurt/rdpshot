@@ -47,8 +47,10 @@ func (g *AutoGrabber) Available() error {
 }
 
 // Grab captures with FreeRDP when possible, otherwise Go framebuffer, otherwise evidence.
+// Pass-the-hash credentials skip FreeRDP (no cleartext for /from-stdin) and use
+// the Go CredSSP framebuffer path only.
 func (g *AutoGrabber) Grab(ctx context.Context, ep model.Endpoint, cred model.Credential) (model.Screenshot, error) {
-	if g.Primary != nil && g.Primary.Available() == nil {
+	if !cred.IsNTHash() && g.Primary != nil && g.Primary.Available() == nil {
 		shot, err := g.Primary.Grab(ctx, ep, cred)
 		if err == nil {
 			return shot, nil

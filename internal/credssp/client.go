@@ -78,11 +78,24 @@ type Session struct {
 	Version  int
 }
 
+// AuthSecret is either a cleartext password or a precomputed NT hash used for
+// NTLMv2 (pass-the-hash). Exactly one of Password or NTHash should be set.
+type AuthSecret struct {
+	Password string
+	NTHash   []byte
+}
+
 // Handshake runs the CredSSP client exchange without credential delegation.
 // It verifies the account but does not send TSCredentials, so no remote
 // desktop session is opened. See HandshakeSession for the full flow.
 func (c *Client) Handshake(ctx context.Context, conn net.Conn, user, password, domain string) error {
-	_, err := c.handshake(ctx, conn, user, password, domain, false)
+	_, err := c.handshake(ctx, conn, user, domain, AuthSecret{Password: password}, false)
+	return err
+}
+
+// HandshakeWith is Handshake using an AuthSecret (password or NT hash).
+func (c *Client) HandshakeWith(ctx context.Context, conn net.Conn, user, domain string, secret AuthSecret) error {
+	_, err := c.handshake(ctx, conn, user, domain, secret, false)
 	return err
 }
 
@@ -91,12 +104,17 @@ func (c *Client) Handshake(ctx context.Context, conn net.Conn, user, password, d
 // On success the returned Session owns the still-open TLS connection; the
 // caller must Close it.
 func (c *Client) HandshakeSession(ctx context.Context, conn net.Conn, user, password, domain string) (*Session, error) {
-	return c.handshake(ctx, conn, user, password, domain, true)
+	return c.handshake(ctx, conn, user, domain, AuthSecret{Password: password}, true)
+}
+
+// HandshakeSessionWith is HandshakeSession using an AuthSecret.
+func (c *Client) HandshakeSessionWith(ctx context.Context, conn net.Conn, user, domain string, secret AuthSecret) (*Session, error) {
+	return c.handshake(ctx, conn, user, domain, secret, true)
 }
 
 // handshake implements CredSSP through pubKeyAuth verification and optionally
 // sends sealed TSCredentials (MS-CSSP 3.1.5).
-func (c *Client) handshake(ctx context.Context, conn net.Conn, user, password, domain string, delegate bool) (*Session, error) {
+func (c *Client) handshake(ctx context.Context, conn net.Conn, user, domain string, secret AuthSecret, delegate bool) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -150,8 +168,18 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, password, d
 		return nil, fmt.Errorf("credssp: generate client challenge: %w", err)
 	}
 	const workstation = ""
-	authMsg, baseKey, err := ntlm.BuildAuthenticate(flags, domain, user, password, workstation,
-		challenge.ServerChallenge, challenge.TargetInfo, timestamp, clientChallenge)
+	var (
+		authMsg *ntlm.AuthenticateMessage
+		baseKey []byte
+	)
+	switch {
+	case len(secret.NTHash) > 0:
+		authMsg, baseKey, err = ntlm.BuildAuthenticateFromNTHash(flags, domain, user, secret.NTHash, workstation,
+			challenge.ServerChallenge, challenge.TargetInfo, timestamp, clientChallenge)
+	default:
+		authMsg, baseKey, err = ntlm.BuildAuthenticate(flags, domain, user, secret.Password, workstation,
+			challenge.ServerChallenge, challenge.TargetInfo, timestamp, clientChallenge)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("credssp: build NTLM AUTHENTICATE: %w", err)
 	}
@@ -215,6 +243,9 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, password, d
 		return &Session{Conn: tlsConn, Security: security, Version: negotiated}, nil
 	}
 
+	// Pass-the-hash sessions still send TSPasswordCreds; the cleartext is
+	// unknown so an empty password is used (best-effort NLA session open).
+	password := secret.Password
 	credDER, err := BuildPasswordCredentials(domain, user, password)
 	if err != nil {
 		return nil, err

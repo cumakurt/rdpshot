@@ -781,3 +781,117 @@ func TestCreateScanAcceptsTargetsFile(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+func TestCreateScanSingleCredAndPTHRedactsSecrets(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	port := closedPort(t)
+	ntHash := "a4f49c406510bdcab6824ee7c30fd852"
+
+	cases := []struct {
+		name string
+		form url.Values
+		mode string
+	}{
+		{
+			name: "single",
+			form: url.Values{
+				"targets":        {"127.0.0.1:" + strconv.Itoa(port)},
+				"concurrency":    {"1"},
+				"rate":           {"100"},
+				"timeout":        {"200ms"},
+				"enable_auth":    {"true"},
+				"ack_authorized": {"true"},
+				"auth_mode":      {"single"},
+				"auth_username":  {"alice"},
+				"auth_domain":    {"CORP"},
+				"auth_password":  {"SecretPass!"},
+			},
+			mode: model.AuthModeSingle,
+		},
+		{
+			name: "pth",
+			form: url.Values{
+				"targets":        {"127.0.0.1:" + strconv.Itoa(port)},
+				"concurrency":    {"1"},
+				"rate":           {"100"},
+				"timeout":        {"200ms"},
+				"enable_auth":    {"true"},
+				"ack_authorized": {"true"},
+				"auth_mode":      {"pth"},
+				"auth_username":  {"bob"},
+				"auth_nthash":    {ntHash},
+			},
+			mode: model.AuthModePTH,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := postForm(t, env.http.URL+"/api/v1/scans", tc.form)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("create status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+			}
+			var created scanCreated
+			if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+				resp.Body.Close()
+				t.Fatalf("decode create: %v", err)
+			}
+			resp.Body.Close()
+
+			stored, err := env.store.GetScan(created.ID)
+			if err != nil {
+				t.Fatalf("store get: %v", err)
+			}
+			if stored.Options.AuthMode != tc.mode {
+				t.Fatalf("stored auth_mode = %q, want %q", stored.Options.AuthMode, tc.mode)
+			}
+			if tc.mode == model.AuthModeSingle && stored.Options.AuthPassword == "" {
+				t.Fatal("store must retain auth_password for the scan engine")
+			}
+			if tc.mode == model.AuthModePTH && stored.Options.AuthNTHash != ntHash {
+				t.Fatalf("stored nthash = %q, want %q", stored.Options.AuthNTHash, ntHash)
+			}
+
+			detailResp := get(t, env.http.URL+"/api/v1/scans/"+created.ID)
+			if detailResp.StatusCode != http.StatusOK {
+				t.Fatalf("get status = %d", detailResp.StatusCode)
+			}
+			var detail model.Scan
+			if err := json.NewDecoder(detailResp.Body).Decode(&detail); err != nil {
+				detailResp.Body.Close()
+				t.Fatalf("decode detail: %v", err)
+			}
+			detailResp.Body.Close()
+			if detail.Options.AuthPassword != "" {
+				t.Fatalf("API leaked auth_password: %q", detail.Options.AuthPassword)
+			}
+			if detail.Options.AuthNTHash != "" {
+				t.Fatalf("API leaked auth_nthash: %q", detail.Options.AuthNTHash)
+			}
+			if detail.Options.AuthMode != tc.mode {
+				t.Fatalf("detail auth_mode = %q", detail.Options.AuthMode)
+			}
+			if detail.Options.AuthUsername == "" {
+				t.Fatal("username should remain visible after redaction")
+			}
+		})
+	}
+}
+
+func TestCreateScanRejectsInvalidAuthMode(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	port := closedPort(t)
+	resp := postForm(t, env.http.URL+"/api/v1/scans", url.Values{
+		"targets":        {"127.0.0.1:" + strconv.Itoa(port)},
+		"enable_auth":    {"true"},
+		"ack_authorized": {"true"},
+		"auth_mode":      {"spray"},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "auth_mode") {
+		t.Fatalf("error body = %s", body)
+	}
+}

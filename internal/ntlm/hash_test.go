@@ -132,3 +132,62 @@ func TestUTF16LERoundTrip(t *testing.T) {
 		t.Fatal("odd-length UTF-16LE must be rejected")
 	}
 }
+
+func TestParseNTHash(t *testing.T) {
+	const wantHex = "a4f49c406510bdcab6824ee7c30fd852"
+	want, err := hex.DecodeString(wantHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{
+		wantHex,
+		"0x" + wantHex,
+		"aad3b435b51404eeaad3b435b51404ee:" + wantHex,
+		"  " + wantHex + "  ",
+	}
+	for _, in := range cases {
+		got, err := ParseNTHash(in)
+		if err != nil {
+			t.Fatalf("ParseNTHash(%q): %v", in, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("ParseNTHash(%q) = %x, want %x", in, got, want)
+		}
+	}
+	for _, bad := range []string{"", "deadbeef", "zz", "aa:bb"} {
+		if _, err := ParseNTHash(bad); err == nil {
+			t.Fatalf("ParseNTHash(%q) should fail", bad)
+		}
+	}
+}
+
+func TestBuildAuthenticateFromNTHashMatchesPassword(t *testing.T) {
+	info := MarshalAVPairs([]AVPair{
+		{ID: MsvAvNbDomainName, Data: encodeUTF16LE("Domain")},
+		{ID: MsvAvTimestamp, Data: filetimeFromUnix(1700000000)},
+	})
+	var serverChallenge [8]byte
+	copy(serverChallenge[:], []byte{1, 2, 3, 4, 5, 6, 7, 8})
+	timestamp := filetimeFromUnix(1700000000)
+	clientChallenge := []byte{9, 10, 11, 12, 13, 14, 15, 16}
+
+	fromPass, keyPass, err := BuildAuthenticate(DefaultNegotiateFlags, "Domain", "User", "Password", "WS",
+		serverChallenge, info, timestamp, clientChallenge)
+	if err != nil {
+		t.Fatalf("password build: %v", err)
+	}
+	fromHash, keyHash, err := BuildAuthenticateFromNTHash(DefaultNegotiateFlags, "Domain", "User", NTHash("Password"), "WS",
+		serverChallenge, info, timestamp, clientChallenge)
+	if err != nil {
+		t.Fatalf("hash build: %v", err)
+	}
+	if !bytes.Equal(fromPass.NTChallengeResponse, fromHash.NTChallengeResponse) {
+		t.Fatal("NT response must match between password and NT-hash builders")
+	}
+	if !bytes.Equal(fromPass.LMChallengeResponse, fromHash.LMChallengeResponse) {
+		t.Fatal("LM response must match between password and NT-hash builders")
+	}
+	if !bytes.Equal(keyPass, keyHash) {
+		t.Fatal("session base key must match between password and NT-hash builders")
+	}
+}

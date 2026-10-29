@@ -32,6 +32,16 @@ Out of scope: exploit/payload, LSASS/hash dump, lateral movement, C2, exfil.
 - [x] Logo/executive export, RBAC enforce, alert rules
 - [x] Cert expiry panel, path posture, RD Gateway auth fingerprint
 
+## Advanced auth (single / PTH)
+
+- [x] `auth_mode` wordlist | single | pth on ScanOptions + loadCandidates
+- [x] NTLM `ParseNTHash` / `BuildAuthenticateFromNTHash` + CredSSP hash path
+- [x] CLI flags + API create/brute/schedule + secret redaction on GET
+- [x] Dashboard / brute / schedules advanced auth panel
+- [x] Tests + README
+- [x] Shared advanced `auth_domain` for all modes (wordlist override via `DOMAIN\user`)
+- [x] Single/PTH success → screenshot → immediate disconnect
+
 ## Review
 
 - CredSSP `HandshakeSession` sends TSCredentials; verify-only `Handshake` unchanged.

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -119,6 +120,18 @@ type ScanOptions struct {
 	MaxAuthFailures  int      `json:"max_auth_failures"`
 	UserWordlist     string   `json:"user_wordlist,omitempty"`
 	PasswordWordlist string   `json:"password_wordlist,omitempty"`
+	// AuthMode selects how credentials are supplied for auth checks:
+	// wordlist (default), single, or pth (pass-the-hash).
+	AuthMode string `json:"auth_mode,omitempty"`
+	// AuthUsername is used by single and pth modes.
+	AuthUsername string `json:"auth_username,omitempty"`
+	// AuthDomain is the default NetBIOS/DNS domain for all auth modes (wordlist
+	// entries that already embed DOMAIN\user or user@domain keep their own).
+	AuthDomain string `json:"auth_domain,omitempty"`
+	// AuthPassword is the cleartext secret for AuthMode=single (redacted on API read).
+	AuthPassword string `json:"auth_password,omitempty"`
+	// AuthNTHash is the NT hash (hex or LM:NT) for AuthMode=pth (redacted on API read).
+	AuthNTHash string `json:"auth_nthash,omitempty"`
 	// BaseScanID when set restricts the run to a delta against a prior scan
 	// (new/changed hosts and hosts with open triage findings).
 	BaseScanID string `json:"base_scan_id,omitempty"`
@@ -129,6 +142,34 @@ type ScanOptions struct {
 	// Acknowledged records that the operator confirmed authorization for the
 	// intrusive checks (auth attempts and screenshot capture).
 	Acknowledged bool `json:"acknowledged"`
+}
+
+// Auth mode constants for ScanOptions.AuthMode.
+const (
+	AuthModeWordlist = "wordlist"
+	AuthModeSingle   = "single"
+	AuthModePTH      = "pth"
+)
+
+// Credential method markers used while candidates are in flight.
+const (
+	CredMethodPassword = "password"
+	CredMethodNTHash   = "nthash"
+)
+
+// RedactAuthSecrets returns a copy of options with password/hash fields cleared.
+func (o ScanOptions) RedactAuthSecrets() ScanOptions {
+	o.AuthPassword = ""
+	o.AuthNTHash = ""
+	return o
+}
+
+// AuthModeImpliesScreenshot reports whether a successful credential check in
+// this auth mode must capture a screenshot and disconnect immediately
+// (single credential and pass-the-hash).
+func (o ScanOptions) AuthModeImpliesScreenshot() bool {
+	mode := strings.ToLower(strings.TrimSpace(o.AuthMode))
+	return mode == AuthModeSingle || mode == AuthModePTH
 }
 
 // Progress tracks live scan counters.
@@ -275,6 +316,11 @@ type Credential struct {
 func (c Credential) Masked() Credential {
 	c.Secret = "********"
 	return c
+}
+
+// IsNTHash reports whether the credential carries an NT hash instead of a password.
+func (c Credential) IsNTHash() bool {
+	return c.Method == CredMethodNTHash || c.Method == "credssp-nla-pth"
 }
 
 // Screenshot is metadata for a captured session image.

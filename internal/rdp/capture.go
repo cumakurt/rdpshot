@@ -14,7 +14,12 @@ import (
 
 	"rdpshot/internal/credssp"
 	"rdpshot/internal/model"
+	"rdpshot/internal/ntlm"
 )
+
+func parseCaptureNTHash(secret string) ([]byte, error) {
+	return ntlm.ParseNTHash(secret)
+}
 
 // Capture errors.
 var (
@@ -87,8 +92,16 @@ func Capture(ctx context.Context, ep model.Endpoint, cred model.Credential, opts
 		return nil, fmt.Errorf("rdp: TLS handshake: %w", err)
 	}
 
+	secret := credssp.AuthSecret{Password: cred.Secret}
+	if cred.IsNTHash() {
+		hash, herr := parseCaptureNTHash(cred.Secret)
+		if herr != nil {
+			return nil, fmt.Errorf("rdp: CredSSP session: %w", herr)
+		}
+		secret = credssp.AuthSecret{NTHash: hash}
+	}
 	client := &credssp.Client{Version: 6}
-	sess, err := client.HandshakeSession(ctx, tlsConn, cred.Username, cred.Secret, cred.Domain)
+	sess, err := client.HandshakeSessionWith(ctx, tlsConn, cred.Username, cred.Domain, secret)
 	if err != nil {
 		return nil, fmt.Errorf("rdp: CredSSP session: %w", err)
 	}
@@ -194,7 +207,11 @@ func (c *captureClient) runMCS(selectedProtocol uint32) error {
 }
 
 func (c *captureClient) sendClientInfo(cred model.Credential) error {
-	info := buildClientInfoPDU(cred.Domain, cred.Username, cred.Secret)
+	password := cred.Secret
+	if cred.IsNTHash() {
+		password = ""
+	}
+	info := buildClientInfoPDU(cred.Domain, cred.Username, password)
 	return writeDataTPDU(c.conn, buildSendDataRequest(c.userID, c.ioChannel, info))
 }
 

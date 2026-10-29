@@ -129,7 +129,11 @@ func (e *Engine) Run(ctx context.Context, ep model.Endpoint, hostID int64, scanI
 		result.Attempts++
 		switch {
 		case err == nil:
-			cred.Method = "credssp-nla"
+			if cred.IsNTHash() {
+				cred.Method = "credssp-nla-pth"
+			} else {
+				cred.Method = "credssp-nla"
+			}
 			result.Credentials = append(result.Credentials, cred)
 			if e.hooks.OnSuccess != nil {
 				e.hooks.OnSuccess(cred)

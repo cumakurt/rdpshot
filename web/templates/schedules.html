@@ -56,16 +56,16 @@
                 <label for="sched-webhook" class="label">Notify webhook URL</label>
                 <input id="sched-webhook" name="notify_webhook" type="url" placeholder="https://hooks.example/rdpshot" class="input">
               </div>
-              {{ template "wordlist_picker" .Wordlists }}
               <fieldset class="fieldset">
                 <legend class="fieldset-legend">Checks</legend>
                 <label class="check-row"><input type="checkbox" name="enable_vuln" value="true" checked class="checkbox"> Vulnerability checks</label>
-                <label class="check-row"><input type="checkbox" name="enable_auth" value="true" class="checkbox"> Authentication checks</label>
+                <label class="check-row"><input type="checkbox" name="enable_auth" value="true" class="checkbox" data-enable-auth> Authentication checks</label>
                 <label class="check-row"><input type="checkbox" name="enable_screens" value="true" class="checkbox"> Screenshots</label>
                 <label class="check-row"><input type="checkbox" name="run_immediately" value="true" class="checkbox"> Run on next tick</label>
                 <label class="check-row"><input type="checkbox" name="notify_on_complete" value="true" class="checkbox"> Notify on completion</label>
                 <label class="check-row"><input type="checkbox" name="notify_on_critical" value="true" checked class="checkbox"> Notify on critical findings</label>
               </fieldset>
+              {{ template "auth_advanced" .Wordlists }}
               <label class="check-card">
                 <input id="sched_ack" type="checkbox" name="ack_authorized" value="true" required class="checkbox mt-0.5">
                 <span>I confirm I am authorized to test these targets on a recurring basis</span>

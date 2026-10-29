@@ -136,15 +136,16 @@ func (g *XFreeRDPGrabber) Grab(ctx context.Context, ep model.Endpoint, cred mode
 	return shot, nil
 }
 
-// captureScript renders the session inside a headless X server and grabs the
-// root window. Environment variables carry every value so nothing is
-// interpolated into the shell source (no quoting hazards), and the password
-// arrives on stdin.
+// captureScript logs into the RDP session inside a headless X server, waits
+// briefly for the desktop, grabs one root-window frame, then kills FreeRDP so
+// the remote session disconnects immediately. Values arrive via environment
+// variables (and the password on stdin) to avoid shell interpolation hazards.
 const captureScript = `
 set -eu
 xfreerdp /v:"$RDSHOT_HOST:$RDSHOT_PORT" /u:"$RDSHOT_USER" /d:"$RDSHOT_DOMAIN" \
   /cert:ignore /size:1024x768 /from-stdin >/dev/null 2>&1 &
 pid=$!
+trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
 sleep "$RDSHOT_WAIT"
 if command -v import >/dev/null 2>&1; then
   import -window root "$RDSHOT_OUT"
@@ -154,8 +155,6 @@ else
   echo "no capture tool available" >&2
   exit 3
 fi
-kill "$pid" 2>/dev/null || true
-wait "$pid" 2>/dev/null || true
 `
 
 // FileName builds a safe, unique image name for one capture. The returned name

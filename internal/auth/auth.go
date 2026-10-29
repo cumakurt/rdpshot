@@ -15,6 +15,7 @@ import (
 
 	"rdpshot/internal/credssp"
 	"rdpshot/internal/model"
+	"rdpshot/internal/ntlm"
 	"rdpshot/internal/rdp"
 )
 
@@ -90,11 +91,26 @@ func (a *credSSPAuthenticator) Authenticate(ctx context.Context, ep model.Endpoi
 		return a.classify(ctx, err)
 	}
 
+	secret, err := secretFromCredential(cred)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrProtocol, err)
+	}
 	client := &credssp.Client{Version: 6}
-	if err := client.Handshake(ctx, tlsConn, cred.Username, cred.Secret, cred.Domain); err != nil {
+	if err := client.HandshakeWith(ctx, tlsConn, cred.Username, cred.Domain, secret); err != nil {
 		return a.classify(ctx, err)
 	}
 	return nil
+}
+
+func secretFromCredential(cred model.Credential) (credssp.AuthSecret, error) {
+	if cred.IsNTHash() {
+		hash, err := ntlm.ParseNTHash(cred.Secret)
+		if err != nil {
+			return credssp.AuthSecret{}, err
+		}
+		return credssp.AuthSecret{NTHash: hash}, nil
+	}
+	return credssp.AuthSecret{Password: cred.Secret}, nil
 }
 
 // dial opens the TCP connection to the endpoint.

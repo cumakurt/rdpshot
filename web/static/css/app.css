@@ -80,8 +80,14 @@ html.dark {
 
 /* ---------- Base ---------- */
 
+html {
+  overflow-x: clip;
+}
+
 body {
   min-height: 100vh;
+  max-width: 100%;
+  overflow-x: clip;
   background-color: var(--bg);
   background-image: var(--bg-accent);
   background-repeat: no-repeat;
@@ -142,7 +148,7 @@ a {
   align-items: center;
   gap: 1rem;
   width: 100%;
-  max-width: 80rem;
+  max-width: min(96rem, 100%);
   margin-inline: auto;
   padding: 0.7rem 1rem;
 }
@@ -281,9 +287,11 @@ html.dark .theme-toggle .icon-moon {
   flex-direction: column;
   gap: 1.5rem;
   width: 100%;
-  max-width: 80rem;
+  max-width: min(96rem, 100%);
   margin-inline: auto;
   padding: 1.6rem 1rem 3rem;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 @media (min-width: 640px) {
@@ -347,11 +355,12 @@ html.dark .theme-toggle .icon-moon {
   flex-direction: column;
   gap: 0.35rem;
   width: 100%;
-  max-width: 80rem;
+  max-width: min(96rem, 100%);
   margin-inline: auto;
   padding: 1.5rem 1rem;
   font-size: 0.75rem;
   color: var(--text-subtle);
+  box-sizing: border-box;
 }
 
 @media (min-width: 640px) {
@@ -465,6 +474,8 @@ html.dark .theme-toggle .icon-moon {
   border: 1px solid var(--border);
   background-color: var(--surface);
   box-shadow: var(--shadow-sm);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .card-body {
@@ -1001,6 +1012,33 @@ html.dark .portal-toast.is-ok { color: #34d399; }
   color: var(--danger, #e11d48);
 }
 
+.auth-advanced {
+  margin-top: 1rem;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.25));
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-muted, transparent);
+}
+
+.auth-advanced.is-disabled {
+  opacity: 0.55;
+}
+
+.auth-advanced-summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  list-style: none;
+}
+
+.auth-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.auth-advanced-body {
+  margin-top: 0.75rem;
+}
+
 .wordlist-save-status.is-ok {
   color: var(--success, #059669);
 }
@@ -1256,12 +1294,52 @@ html.dark .tone-slate {
 
 .table-wrap {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.875rem;
+  min-width: 40rem;
+}
+
+.table th.col-actions,
+.table td.col-actions {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background-color: var(--surface);
+  box-shadow: -6px 0 8px -6px color-mix(in srgb, #0f172a 18%, transparent);
+}
+
+.table thead th.col-actions {
+  background: var(--surface-2);
+}
+
+.table .progress-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 9rem;
+  max-width: 14rem;
+}
+
+.table .progress-cell .progress {
+  flex: 1 1 auto;
+  min-width: 3.5rem;
+  max-width: 6rem;
+}
+
+.table .progress-cell .progress-label {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-muted);
 }
 
 .table thead th {

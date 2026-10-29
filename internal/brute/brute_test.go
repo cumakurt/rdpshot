@@ -190,20 +190,83 @@ func TestLoadWordlistErrors(t *testing.T) {
 }
 
 func TestBuildCandidates(t *testing.T) {
-	candidates, err := BuildCandidates([]string{"a", "b"}, []string{"1", "2", "3"})
+	candidates, err := BuildCandidates([]string{"a", "b"}, []string{"1", "2", "3"}, "")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	if len(candidates) != 6 {
 		t.Fatalf("candidates = %d, want 6", len(candidates))
 	}
-	if _, err := BuildCandidates(nil, []string{"1"}); err == nil {
+	if _, err := BuildCandidates(nil, []string{"1"}, ""); err == nil {
 		t.Fatal("expected error for empty user list")
 	}
-	if _, err := BuildCandidates([]string{"a"}, nil); err == nil {
+	if _, err := BuildCandidates([]string{"a"}, nil, ""); err == nil {
 		t.Fatal("expected error for empty password list")
 	}
-	if _, err := BuildCandidates(make([]string, 2000), make([]string, 2000)); err == nil {
+	if _, err := BuildCandidates(make([]string, 2000), make([]string, 2000), ""); err == nil {
 		t.Fatal("expected error for oversized candidate list")
+	}
+}
+
+func TestBuildCandidatesAppliesDomain(t *testing.T) {
+	cands, err := BuildCandidates(
+		[]string{"alice", `CORP\bob`, "carol@fabrikam.local"},
+		[]string{"x"},
+		"DEFAULT",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 3 {
+		t.Fatalf("len = %d, want 3", len(cands))
+	}
+	want := []struct{ user, domain string }{
+		{"alice", "DEFAULT"},
+		{"bob", "CORP"},
+		{"carol", "fabrikam.local"},
+	}
+	for i, w := range want {
+		if cands[i].Username != w.user || cands[i].Domain != w.domain {
+			t.Fatalf("cand[%d] = %s\\%s, want %s\\%s", i, cands[i].Domain, cands[i].Username, w.domain, w.user)
+		}
+	}
+}
+
+func TestParseUserDomain(t *testing.T) {
+	user, domain := ParseUserDomain("alice", "LAB")
+	if user != "alice" || domain != "LAB" {
+		t.Fatalf("got %q %q", user, domain)
+	}
+	user, domain = ParseUserDomain(`CORP\bob`, "LAB")
+	if user != "bob" || domain != "CORP" {
+		t.Fatalf("backslash got %q %q", user, domain)
+	}
+	user, domain = ParseUserDomain("carol@fabrikam.local", "LAB")
+	if user != "carol" || domain != "fabrikam.local" {
+		t.Fatalf("at-sign got %q %q", user, domain)
+	}
+}
+
+func TestBuildSingleAndPTHCandidates(t *testing.T) {
+	single, err := BuildSingleCandidate("alice", "CORP", "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(single) != 1 || single[0].Method != model.CredMethodPassword || single[0].Secret != "pass" {
+		t.Fatalf("single = %+v", single)
+	}
+	hash := "a4f49c406510bdcab6824ee7c30fd852"
+	pth, err := BuildPTHCandidate("bob", "", hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pth) != 1 || pth[0].Method != model.CredMethodNTHash || pth[0].Secret != hash {
+		t.Fatalf("pth = %+v", pth)
+	}
+	if _, err := BuildSingleCandidate("", "", "x"); err == nil {
+		t.Fatal("empty username must fail")
+	}
+	if _, err := BuildPTHCandidate("bob", "", "not-a-hash"); err == nil {
+		t.Fatal("invalid hash must fail")
 	}
 }

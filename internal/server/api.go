@@ -166,15 +166,6 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	if passwordWordlist == "" {
 		passwordWordlist = strings.TrimSpace(form.Get("password_wordlist"))
 	}
-	if enableAuth {
-		defaultUser, defaultPassword := s.wordlistDefaults()
-		if userWordlist == "" {
-			userWordlist = defaultUser
-		}
-		if passwordWordlist == "" {
-			passwordWordlist = defaultPassword
-		}
-	}
 
 	scan := model.Scan{
 		ID:         scanID,
@@ -202,6 +193,27 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 			Acknowledged:     ack,
 		},
 	}
+	if err := applyAuthOptions(&scan.Options, form.Get); err != nil {
+		s.writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if scan.Options.EnableAuth && !ack {
+		s.writeAPIError(w, http.StatusBadRequest,
+			"credential checks and screenshots require the authorization acknowledgement")
+		return
+	}
+	if scan.Options.EnableAuth && !s.requireIntrusive(w, r) {
+		return
+	}
+	if scan.Options.EnableAuth && scan.Options.AuthMode == model.AuthModeWordlist {
+		defaultUser, defaultPassword := s.wordlistDefaults()
+		if scan.Options.UserWordlist == "" {
+			scan.Options.UserWordlist = defaultUser
+		}
+		if scan.Options.PasswordWordlist == "" {
+			scan.Options.PasswordWordlist = defaultPassword
+		}
+	}
 	if err := s.deps.Store.CreateScan(scan); err != nil {
 		s.internalError(w, r, "create scan", err)
 		return
@@ -225,7 +237,7 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	if scans == nil {
 		scans = []model.Scan{}
 	}
-	s.writeJSON(w, http.StatusOK, scans)
+	s.writeJSON(w, http.StatusOK, redactScans(scans))
 }
 
 // handleGetScan returns one scan.
@@ -234,7 +246,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.writeJSON(w, http.StatusOK, scan)
+	s.writeJSON(w, http.StatusOK, redactScan(scan))
 }
 
 // handleCancelScan requests cancellation of a running scan.
@@ -375,7 +387,7 @@ func (s *Server) handleRenameScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scan.Name = name
-	s.writeJSON(w, http.StatusOK, scan)
+	s.writeJSON(w, http.StatusOK, redactScan(scan))
 }
 
 // handleBruteForceScan starts a credential-only scan against hosts discovered
@@ -479,13 +491,6 @@ func (s *Server) handleBruteForceScan(w http.ResponseWriter, r *http.Request) {
 	if passwordWordlist == "" {
 		passwordWordlist = strings.TrimSpace(form.Get("password_wordlist"))
 	}
-	defaultUser, defaultPassword := s.wordlistDefaults()
-	if userWordlist == "" {
-		userWordlist = defaultUser
-	}
-	if passwordWordlist == "" {
-		passwordWordlist = defaultPassword
-	}
 
 	targets := make([]string, len(endpoints))
 	ports := make([]uint16, 0, len(endpoints))
@@ -522,6 +527,19 @@ func (s *Server) handleBruteForceScan(w http.ResponseWriter, r *http.Request) {
 			PasswordWordlist: passwordWordlist,
 			Acknowledged:     true,
 		},
+	}
+	if err := applyAuthOptions(&scan.Options, form.Get); err != nil {
+		s.writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if scan.Options.AuthMode == model.AuthModeWordlist {
+		defaultUser, defaultPassword := s.wordlistDefaults()
+		if scan.Options.UserWordlist == "" {
+			scan.Options.UserWordlist = defaultUser
+		}
+		if scan.Options.PasswordWordlist == "" {
+			scan.Options.PasswordWordlist = defaultPassword
+		}
 	}
 	if err := s.deps.Store.CreateScan(scan); err != nil {
 		s.internalError(w, r, "create credential audit", err)

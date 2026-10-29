@@ -192,6 +192,11 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	ackAuthorized := fs.Bool("ack-authorized", false, "confirm you are authorized to test these targets")
 	userWordlist := fs.String("user-wordlist", def.UserWordlist, "username wordlist for the credential audit")
 	passwordWordlist := fs.String("password-wordlist", def.PasswordWordlist, "password wordlist for the credential audit")
+	authMode := fs.String("auth-mode", model.AuthModeWordlist, "credential source: wordlist, single, or pth")
+	authUser := fs.String("auth-user", "", "username for single/pth auth modes")
+	authDomain := fs.String("auth-domain", "", "default domain for all auth modes (wordlist/single/pth)")
+	authPassword := fs.String("auth-password", "", "password for single auth mode")
+	authNTHash := fs.String("auth-nthash", "", "NT hash (32 hex or LM:NT) for pth auth mode")
 	reportFormat := fs.String("report", "html", "report to generate after the scan: none, html, csv or pdf")
 	reportDir := fs.String("report-dir", "", "directory for generated reports (default: <outputs>/reports)")
 	dbPath := fs.String("db", def.DBPath, "path to the SQLite database")
@@ -218,9 +223,38 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	// Safety guardrail: the intrusive stages need an explicit authorization
 	// acknowledgement so the tool cannot be pointed at third-party hosts by
 	// accident.
+	mode := strings.ToLower(strings.TrimSpace(*authMode))
+	switch mode {
+	case "", model.AuthModeWordlist, model.AuthModeSingle, model.AuthModePTH:
+		if mode == "" {
+			*authMode = model.AuthModeWordlist
+		}
+	default:
+		fmt.Fprintf(stderr, "rdpshot scan: invalid --auth-mode %q (want wordlist, single, or pth)\n", *authMode)
+		return exitUsage
+	}
+	if mode == model.AuthModeSingle || mode == model.AuthModePTH {
+		*enableAuth = true
+		// Successful single/PTH login always captures a screenshot then disconnects.
+		*enableScreens = true
+	}
 	if (*enableAuth || *enableScreens) && !*ackAuthorized {
 		fmt.Fprintln(stderr, "rdpshot scan: credential checks and screenshots require --ack-authorized to confirm you are authorized to test these targets")
 		return exitUsage
+	}
+	if *enableAuth {
+		switch mode {
+		case model.AuthModeSingle:
+			if strings.TrimSpace(*authUser) == "" || strings.TrimSpace(*authPassword) == "" {
+				fmt.Fprintln(stderr, "rdpshot scan: --auth-mode=single requires --auth-user and --auth-password")
+				return exitUsage
+			}
+		case model.AuthModePTH:
+			if strings.TrimSpace(*authUser) == "" || strings.TrimSpace(*authNTHash) == "" {
+				fmt.Fprintln(stderr, "rdpshot scan: --auth-mode=pth requires --auth-user and --auth-nthash")
+				return exitUsage
+			}
+		}
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -297,7 +331,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	hub := events.NewHub(0)
 	defer hub.Close()
 
-	authenticator := auth.NewCredSSPAuthenticator(cfg.Timeout)
+	authenticator := auth.BruteAdapter{Inner: auth.NewCredSSPAuthenticator(cfg.Timeout)}
 	grabber := screenshot.NewAutoGrabber(filepath.Join(cfg.OutputsDir, "screenshots"), logger)
 	engine := scanner.New(scanner.Dependencies{
 		Store:         st,
@@ -329,6 +363,11 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			MaxAuthFailures:  cfg.MaxAuthFailures,
 			UserWordlist:     cfg.UserWordlist,
 			PasswordWordlist: cfg.PasswordWordlist,
+			AuthMode:         *authMode,
+			AuthUsername:     *authUser,
+			AuthDomain:       *authDomain,
+			AuthPassword:     *authPassword,
+			AuthNTHash:       *authNTHash,
 			Acknowledged:     *ackAuthorized,
 		},
 	}
@@ -478,7 +517,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	hub := events.NewHub(0)
 	defer hub.Close()
 
-	authenticator := auth.NewCredSSPAuthenticator(cfg.Timeout)
+	authenticator := auth.BruteAdapter{Inner: auth.NewCredSSPAuthenticator(cfg.Timeout)}
 	grabber := screenshot.NewAutoGrabber(filepath.Join(cfg.OutputsDir, "screenshots"), logger)
 	engine := scanner.New(scanner.Dependencies{
 		Store:         st,

@@ -32,14 +32,25 @@ const TimestampLen = 8
 // message integrity (MsvAvFlags bit 0x2 is not set by RDP servers).
 func BuildAuthenticate(flags uint32, domain, user, password, workstation string, serverChallenge [8]byte,
 	targetInfo, timestamp, clientChallenge []byte) (*AuthenticateMessage, []byte, error) {
+	return BuildAuthenticateFromNTHash(flags, domain, user, NTHash(password), workstation,
+		serverChallenge, targetInfo, timestamp, clientChallenge)
+}
+
+// BuildAuthenticateFromNTHash is the pass-the-hash variant of BuildAuthenticate:
+// the caller supplies a 16-byte NT hash instead of a cleartext password.
+func BuildAuthenticateFromNTHash(flags uint32, domain, user string, ntHash []byte, workstation string,
+	serverChallenge [8]byte, targetInfo, timestamp, clientChallenge []byte) (*AuthenticateMessage, []byte, error) {
 	if len(timestamp) != TimestampLen {
 		return nil, nil, fmt.Errorf("ntlm: timestamp must be %d bytes, got %d", TimestampLen, len(timestamp))
 	}
 	if len(clientChallenge) != ClientChallengeLen {
 		return nil, nil, fmt.Errorf("ntlm: client challenge must be %d bytes, got %d", ClientChallengeLen, len(clientChallenge))
 	}
+	if len(ntHash) != NTHashSize {
+		return nil, nil, fmt.Errorf("ntlm: NT hash must be %d bytes, got %d", NTHashSize, len(ntHash))
+	}
 
-	ntLMv2Hash := NTLMv2Hash(user, domain, NTHash(password))
+	ntLMv2Hash := NTLMv2Hash(user, domain, ntHash)
 	blob := ntlmBlob(timestamp, clientChallenge, targetInfo)
 	proof := ntProofStr(ntLMv2Hash, serverChallenge[:], blob)
 

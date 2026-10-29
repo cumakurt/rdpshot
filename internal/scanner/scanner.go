@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,12 +104,15 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 		e.persistScan(*scan)
 	}
 	e.prioritizeEndpoints(scan, endpoints)
-	screensEnabled := scan.Options.EnableScreens && scan.Options.Acknowledged && e.deps.Grabber != nil
+	screensEnabled := scan.Options.Acknowledged && e.deps.Grabber != nil &&
+		(scan.Options.EnableScreens || scan.Options.AuthModeImpliesScreenshot())
 	if screensEnabled {
 		if err := e.deps.Grabber.Available(); err != nil {
 			logger.Warn("screenshot capture disabled", "reason", err.Error())
 			e.log(scan.ID, "warn", "screenshot capture disabled: "+err.Error())
 			screensEnabled = false
+		} else if scan.Options.AuthModeImpliesScreenshot() {
+			e.log(scan.ID, "info", "single/pth auth: screenshot after successful login, then disconnect")
 		}
 	}
 
@@ -396,15 +400,28 @@ func (e *Engine) captureScreenshot(ctx context.Context, scan *model.Scan, ep mod
 }
 
 func (e *Engine) loadCandidates(opts model.ScanOptions) ([]model.Credential, error) {
-	users, err := e.loadWordlist(opts.UserWordlist)
-	if err != nil {
-		return nil, err
+	mode := strings.ToLower(strings.TrimSpace(opts.AuthMode))
+	if mode == "" {
+		mode = model.AuthModeWordlist
 	}
-	passwords, err := e.loadWordlist(opts.PasswordWordlist)
-	if err != nil {
-		return nil, err
+	switch mode {
+	case model.AuthModeSingle:
+		return brute.BuildSingleCandidate(opts.AuthUsername, opts.AuthDomain, opts.AuthPassword)
+	case model.AuthModePTH:
+		return brute.BuildPTHCandidate(opts.AuthUsername, opts.AuthDomain, opts.AuthNTHash)
+	case model.AuthModeWordlist:
+		users, err := e.loadWordlist(opts.UserWordlist)
+		if err != nil {
+			return nil, err
+		}
+		passwords, err := e.loadWordlist(opts.PasswordWordlist)
+		if err != nil {
+			return nil, err
+		}
+		return brute.BuildCandidates(users, passwords, opts.AuthDomain)
+	default:
+		return nil, fmt.Errorf("scanner: unknown auth_mode %q (want wordlist|single|pth)", opts.AuthMode)
 	}
-	return brute.BuildCandidates(users, passwords)
 }
 
 func (e *Engine) loadReuseCredentials(scan *model.Scan) []model.Credential {

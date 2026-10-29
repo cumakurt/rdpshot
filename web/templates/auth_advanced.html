@@ -1,0 +1,63 @@
+{{ define "auth_advanced" }}
+<details class="auth-advanced" data-auth-advanced>
+  <summary class="auth-advanced-summary">Advanced authentication</summary>
+  <div class="auth-advanced-body">
+    <fieldset class="fieldset">
+      <legend class="fieldset-legend">Credential source</legend>
+      <div class="flex flex-col gap-2">
+        <label class="check-row">
+          <input type="radio" name="auth_mode" value="wordlist" checked class="checkbox" data-auth-mode>
+          Wordlist (user × password lists)
+        </label>
+        <label class="check-row">
+          <input type="radio" name="auth_mode" value="single" class="checkbox" data-auth-mode>
+          Single credential
+        </label>
+        <label class="check-row">
+          <input type="radio" name="auth_mode" value="pth" class="checkbox" data-auth-mode>
+          Pass-the-hash (NT hash)
+        </label>
+      </div>
+    </fieldset>
+
+    <div class="field mt-4">
+      <label for="{{ .IDPrefix }}-auth-domain" class="label">Domain (optional)</label>
+      <input id="{{ .IDPrefix }}-auth-domain" name="auth_domain" type="text"
+        class="input" placeholder="CORP or leave empty for local accounts"
+        autocomplete="off" spellcheck="false" data-auth-domain>
+      <p class="wordlist-hint">
+        Applied to wordlist users that do not already include DOMAIN\user or user@domain.
+        Single/PTH modes use the same domain. On successful single/PTH login a screenshot is taken and the session is disconnected immediately.
+      </p>
+    </div>
+
+    <div class="mt-4" data-auth-panel="wordlist">
+      {{ template "wordlist_picker" . }}
+    </div>
+
+    <div class="mt-4 hidden" data-auth-panel="cred" hidden>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="field">
+          <label for="{{ .IDPrefix }}-auth-user" class="label">Username</label>
+          <input id="{{ .IDPrefix }}-auth-user" name="auth_username" type="text"
+            class="input" autocomplete="username" spellcheck="false" data-auth-cred-field disabled>
+        </div>
+        <div class="field hidden" data-auth-panel="single" hidden>
+          <label for="{{ .IDPrefix }}-auth-password" class="label">Password</label>
+          <input id="{{ .IDPrefix }}-auth-password" name="auth_password" type="password"
+            class="input" autocomplete="current-password" data-auth-cred-field disabled>
+        </div>
+        <div class="field hidden" data-auth-panel="pth" hidden>
+          <label for="{{ .IDPrefix }}-auth-nthash" class="label">NT hash</label>
+          <input id="{{ .IDPrefix }}-auth-nthash" name="auth_nthash" type="text"
+            class="input input-mono" placeholder="32 hex or LM:NT" autocomplete="off" spellcheck="false"
+            data-auth-cred-field disabled>
+          <p class="wordlist-hint mt-2">
+            CredSSP/NTLMv2 with the NT hash. Screenshots use the Go framebuffer path only (FreeRDP skipped).
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</details>
+{{ end }}

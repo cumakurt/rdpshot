@@ -304,7 +304,14 @@
 
     var label = el.querySelector('[data-progress-label]');
     if (label) {
-      label.textContent = done + '/' + total + ' (' + pct.toFixed(1) + '%)';
+      var full = done + '/' + total + ' (' + pct.toFixed(1) + '%)';
+      label.setAttribute('title', full);
+      // Compact label inside dense tables so the actions column stays visible.
+      if (el.classList.contains('progress-cell') && total >= 10000) {
+        label.textContent = pct.toFixed(1) + '%';
+      } else {
+        label.textContent = full;
+      }
     }
 
     if (el.hasAttribute('role') && el.getAttribute('role') === 'progressbar') {
@@ -1371,6 +1378,78 @@
     });
   }
 
+  function syncAuthAdvanced(root) {
+    if (!root) {
+      return;
+    }
+    var form = root.closest('form') || document;
+    var enableAuth = form.querySelector('[data-enable-auth]');
+    var authEnabled = !enableAuth || enableAuth.checked;
+    root.classList.toggle('is-disabled', !authEnabled);
+    var modeInput = root.querySelector('[data-auth-mode]:checked');
+    var mode = modeInput ? modeInput.value : 'wordlist';
+    if (!authEnabled) {
+      mode = 'wordlist';
+    }
+    Array.prototype.forEach.call(root.querySelectorAll('[data-auth-mode]'), function (radio) {
+      radio.disabled = !authEnabled;
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('[data-auth-domain]'), function (field) {
+      field.disabled = !authEnabled;
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('[data-auth-panel]'), function (panel) {
+      var key = panel.getAttribute('data-auth-panel');
+      var show = false;
+      if (key === 'wordlist') {
+        show = mode === 'wordlist';
+      } else if (key === 'cred') {
+        show = mode === 'single' || mode === 'pth';
+      } else if (key === 'single') {
+        show = mode === 'single';
+      } else if (key === 'pth') {
+        show = mode === 'pth';
+      }
+      panel.hidden = !show;
+      panel.classList.toggle('hidden', !show);
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('[data-auth-cred-field]'), function (field) {
+      var panel = field.closest('[data-auth-panel]');
+      var panelKey = panel ? panel.getAttribute('data-auth-panel') : '';
+      var active = authEnabled && (
+        (panelKey === 'cred' && (mode === 'single' || mode === 'pth')) ||
+        (panelKey === 'single' && mode === 'single') ||
+        (panelKey === 'pth' && mode === 'pth')
+      );
+      field.disabled = !active;
+    });
+  }
+
+  function initAuthAdvanced() {
+    var blocks = document.querySelectorAll('[data-auth-advanced]');
+    Array.prototype.forEach.call(blocks, function (root) {
+      syncAuthAdvanced(root);
+      Array.prototype.forEach.call(root.querySelectorAll('[data-auth-mode]'), function (radio) {
+        radio.addEventListener('change', function () {
+          if (radio.value === 'single' || radio.value === 'pth') {
+            var form = root.closest('form');
+            var enableAuth = form && form.querySelector('[data-enable-auth]');
+            if (enableAuth && !enableAuth.checked) {
+              enableAuth.checked = true;
+            }
+          }
+          syncAuthAdvanced(root);
+        });
+      });
+      var form = root.closest('form');
+      var enableAuth = form && form.querySelector('[data-enable-auth]');
+      if (enableAuth) {
+        enableAuth.addEventListener('change', function () {
+          syncAuthAdvanced(root);
+        });
+      }
+    });
+  }
+
   function initWordlistPickers() {
     var pickers = document.querySelectorAll('[data-wordlist-picker]');
     Array.prototype.forEach.call(pickers, function (picker) {
@@ -2102,6 +2181,7 @@
     initLive();
     initTargetsFilePickers();
     initWordlistPickers();
+    initAuthAdvanced();
     initScanForm();
     initScanLifecycleButtons();
     initScanMetaForm();

@@ -133,8 +133,6 @@
                 </div>
               </div>
 
-              {{ template "wordlist_picker" .Wordlists }}
-
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div class="field">
                   <label for="scan-base" class="label">Delta base scan (optional)</label>
@@ -167,7 +165,7 @@
                     RD Web / Gateway / UDP discovery
                   </label>
                   <label class="check-row">
-                    <input type="checkbox" name="enable_auth" value="true" class="checkbox">
+                    <input type="checkbox" name="enable_auth" value="true" class="checkbox" data-enable-auth>
                     Authentication checks
                   </label>
                   <label class="check-row">
@@ -176,6 +174,8 @@
                   </label>
                 </div>
               </fieldset>
+
+              {{ template "auth_advanced" .Wordlists }}
 
               <label class="check-card">
                 <input id="ack_authorized" type="checkbox" name="ack_authorized" value="true" required class="checkbox mt-0.5">

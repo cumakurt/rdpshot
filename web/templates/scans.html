@@ -34,7 +34,7 @@
                 <th>Creds</th>
                 <th>Screens</th>
                 <th>Created</th>
-                <th><span class="sr-only">Actions</span></th>
+                <th class="col-actions"><span class="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -51,18 +51,18 @@
                   </td>
                   <td class="cell-mono">{{ len .Options.Targets }}</td>
                   <td>
-                    <div class="flex items-center gap-2" data-progress data-done="{{ .Progress.Done }}" data-total="{{ .Progress.Total }}" role="progressbar" aria-label="Scan progress">
-                      <div class="progress w-24">
+                    <div class="progress-cell" data-progress data-done="{{ .Progress.Done }}" data-total="{{ .Progress.Total }}" role="progressbar" aria-label="Scan progress">
+                      <div class="progress">
                         <div class="progress-fill" data-progress-fill></div>
                       </div>
-                      <span class="cell-mono whitespace-nowrap" data-progress-label>{{ .Progress.Done }}/{{ .Progress.Total }}</span>
+                      <span class="progress-label" data-progress-label title="{{ .Progress.Done }}/{{ .Progress.Total }}">{{ .Progress.Done }}/{{ .Progress.Total }}</span>
                     </div>
                   </td>
                   <td class="cell-mono">{{ .Progress.Findings }}</td>
                   <td class="cell-mono tone-emerald">{{ .Progress.Creds }}</td>
                   <td class="cell-mono tone-amber">{{ .Progress.Screens }}</td>
-                  <td>{{ .CreatedAt.Format "2006-01-02 15:04:05" }}</td>
-                  <td class="text-right whitespace-nowrap">
+                  <td class="cell-mono">{{ .CreatedAt.Format "2006-01-02 15:04" }}</td>
+                  <td class="col-actions text-right whitespace-nowrap">
                     <a href="/scans/{{ .ID }}" class="btn btn-ghost btn-sm">Open</a>
                     {{ if eq .Status "running" }}
                     <button type="button" data-pause-scan="{{ .ID }}" class="btn btn-ghost btn-sm">Pause</button>
