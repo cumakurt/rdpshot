@@ -115,9 +115,17 @@ type ScanOptions struct {
 	EnableVuln       bool     `json:"enable_vuln"`
 	EnableAuth       bool     `json:"enable_auth"`
 	EnableScreens    bool     `json:"enable_screens"`
+	EnableDiscovery  bool     `json:"enable_discovery"`
 	MaxAuthFailures  int      `json:"max_auth_failures"`
 	UserWordlist     string   `json:"user_wordlist,omitempty"`
 	PasswordWordlist string   `json:"password_wordlist,omitempty"`
+	// BaseScanID when set restricts the run to a delta against a prior scan
+	// (new/changed hosts and hosts with open triage findings).
+	BaseScanID string `json:"base_scan_id,omitempty"`
+	// Path labels the network vantage used for this audit (internal/external).
+	Path string `json:"path,omitempty"`
+	// MaxRuntimeSec when > 0 cancels the scan after that many seconds.
+	MaxRuntimeSec int `json:"max_runtime_sec,omitempty"`
 	// Acknowledged records that the operator confirmed authorization for the
 	// intrusive checks (auth attempts and screenshot capture).
 	Acknowledged bool `json:"acknowledged"`
@@ -187,6 +195,16 @@ type ServiceInfo struct {
 	Banner        string   `json:"banner,omitempty"`
 	// Evidence holds protocol-level details for reporting.
 	Evidence map[string]string `json:"evidence,omitempty"`
+	// Alternate exposure paths discovered by optional probes.
+	RDWeb          bool   `json:"rd_web,omitempty"`
+	RDWebURL       string `json:"rd_web_url,omitempty"`
+	RDGateway      bool   `json:"rd_gateway,omitempty"`
+	RDGatewayAuth  string `json:"rd_gateway_auth,omitempty"`
+	UDP3389        bool   `json:"udp_3389,omitempty"`
+	// KerberosOffered is set when the client advertised Kerberos during NLA.
+	KerberosOffered bool `json:"kerberos_offered,omitempty"`
+	// SmartCardRequired is set when CredSSP/NLA indicates smart-card logon.
+	SmartCardRequired bool `json:"smart_card_required,omitempty"`
 }
 
 // Host is one probed endpoint within a scan.
@@ -340,12 +358,14 @@ type Analytics struct {
 	NLAMissing       int64          `json:"nla_missing"`
 	LegacyTLS        int64          `json:"legacy_tls"`
 	SelfSigned       int64          `json:"self_signed"`
+	CertsExpiring30d int64          `json:"certs_expiring_30d"`
 	CriticalFindings int64          `json:"critical_findings"`
 	AvgCVSS          float64        `json:"avg_cvss"`
 	Exposure         []LabeledCount `json:"exposure"`
 	OSTypes          []LabeledCount `json:"os_types"`
 	Statuses         []LabeledCount `json:"statuses"`
 	TopHosts         []HostRisk     `json:"top_hosts"`
+	ExpiringCerts    []HostRisk     `json:"expiring_certs,omitempty"`
 }
 
 // EventType enumerates live event kinds published over SSE.
@@ -437,6 +457,12 @@ func (r UserRole) CanAdmin() bool {
 	return r == RoleAdmin
 }
 
+// CanIntrusive reports whether the role may start credential/screenshot work
+// or delete scan artifacts.
+func (r UserRole) CanIntrusive() bool {
+	return r == RoleOperator || r == RoleAdmin
+}
+
 // User is a local portal account.
 type User struct {
 	ID           string    `json:"id"`
@@ -464,6 +490,27 @@ type ReportBranding struct {
 	Engagement   string `json:"engagement,omitempty"`
 	PreparedBy   string `json:"prepared_by,omitempty"`
 	FooterNote   string `json:"footer_note,omitempty"`
+	LogoDataURI  string `json:"logo_data_uri,omitempty"`
+}
+
+// HostNote is an operator annotation for one endpoint within an engagement.
+type HostNote struct {
+	ID         int64     `json:"id"`
+	Engagement string    `json:"engagement"`
+	Address    string    `json:"address"`
+	Port       uint16    `json:"port"`
+	Note       string    `json:"note"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	UpdatedBy  string    `json:"updated_by,omitempty"`
+}
+
+// AlertRules configures outbound alerts evaluated when a scan finishes.
+type AlertRules struct {
+	WebhookURL      string `json:"webhook_url,omitempty"`
+	OnCritical      bool   `json:"on_critical"`
+	OnNLARegressed  bool   `json:"on_nla_regressed"`
+	OnCredReuseMin  int    `json:"on_cred_reuse_min"`
+	Enabled         bool   `json:"enabled"`
 }
 
 // TrendPoint is one sample in a posture time series.

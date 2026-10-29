@@ -110,6 +110,7 @@ footer {
 </head>
 <body>
 <header class="page-header">
+  {{if .LogoDataURI}}<p><img src="{{.LogoDataURI}}" alt="Organization logo" style="max-height:64px;max-width:240px"></p>{{end}}
   <h1>RDP Security Assessment Report</h1>
   <p class="subtitle">{{.ToolName}} {{.ToolVersion}} · {{.Organization}}</p>
   <dl class="meta">
@@ -131,6 +132,12 @@ footer {
     </div>
     {{end}}
   </div>
+  {{if .TopFindings}}
+  <h3 style="margin-top:16px;font-size:14px">Top findings</h3>
+  <ol>
+    {{range .TopFindings}}<li><strong>{{.Severity}}</strong> — {{.Title}} ({{.HostPort}})</li>{{end}}
+  </ol>
+  {{end}}
 </section>
 <section id="severity">
   <h2>Severity Distribution</h2>

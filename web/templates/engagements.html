@@ -1,0 +1,182 @@
+{{ define "engagements" }}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="antialiased">
+    {{ template "nav" . }}
+    <main class="page-main">
+      <section class="page-head">
+        <div>
+          <p class="page-eyebrow">Workspace</p>
+          <h1 class="page-title mt-1">Engagements</h1>
+          <p class="page-subtitle">Freeze scope, review host notes, and jump to estate, score, and evidence.</p>
+        </div>
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div class="card lg:col-span-1">
+          <div class="card-head"><h2 class="card-title">Engagements</h2></div>
+          <div class="card-body">
+            {{ if .Engagements }}
+            <ul class="space-y-2">
+              {{ range .Engagements }}
+              <li>
+                <a class="item-tile block {{ if eq $.Selected .Name }}ring-1 ring-indigo-400{{ end }}"
+                  href="/engagements?engagement={{ .Name }}">
+                  <p class="item-title">{{ .Name }}</p>
+                  <p class="item-meta">{{ .Scans }} scan(s)</p>
+                </a>
+              </li>
+              {{ end }}
+            </ul>
+            {{ else }}
+            <p class="text-sm text-subtle">No engagement labels yet. Set one when starting a scan.</p>
+            {{ end }}
+          </div>
+        </div>
+
+        <div class="space-y-6 lg:col-span-2">
+          {{ if .Selected }}
+          <section class="card">
+            <div class="card-head">
+              <h2 class="card-title">{{ .Selected }}</h2>
+              <div class="page-actions">
+                <a class="btn btn-ghost btn-sm" href="/estate?engagement={{ .Selected }}">Estate</a>
+                <a class="btn btn-ghost btn-sm" href="/reports">Reports</a>
+              </div>
+            </div>
+            <div class="card-body form-stack">
+              <form id="freeze-form" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <input type="hidden" name="engagement" value="{{ .Selected }}">
+                <div class="field sm:col-span-2">
+                  <label class="label" for="freeze-targets">Freeze targets (one per line)</label>
+                  <textarea id="freeze-targets" name="targets" class="textarea" rows="4" placeholder="10.0.0.0/24&#10;rdp.example.com"></textarea>
+                </div>
+                <div class="field">
+                  <label class="label" for="freeze-note">ROE / note</label>
+                  <input id="freeze-note" name="note" class="input" placeholder="Authorized window / constraints">
+                </div>
+                <div class="field flex items-end">
+                  <button type="submit" class="btn btn-primary btn-block">Freeze scope</button>
+                </div>
+              </form>
+              <p id="freeze-status" class="card-hint"></p>
+              {{ if .Scope }}
+              <div class="panel mt-4">
+                <h3 class="panel-title">Frozen scope</h3>
+                <p class="panel-body">Frozen {{ .Scope.FrozenAt.Format "2006-01-02 15:04:05" }}{{ if .Scope.Note }} · {{ .Scope.Note }}{{ end }}</p>
+                <ul class="mt-2 space-y-1 font-mono text-xs">
+                  {{ range .Scope.Targets }}<li>{{ . }}</li>{{ end }}
+                </ul>
+              </div>
+              {{ end }}
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2 class="card-title">Host notes</h2></div>
+            <div class="card-body">
+              <form id="host-note-form" class="grid grid-cols-1 gap-3 sm:grid-cols-4 mb-4">
+                <input type="hidden" name="engagement" value="{{ .Selected }}">
+                <div class="field"><label class="label">Address</label><input name="address" class="input" required></div>
+                <div class="field"><label class="label">Port</label><input name="port" type="number" value="3389" class="input"></div>
+                <div class="field sm:col-span-2"><label class="label">Note</label><input name="note" class="input" required></div>
+                <div class="sm:col-span-4"><button type="submit" class="btn btn-ghost">Save note</button></div>
+              </form>
+              {{ if .Notes }}
+              <ul class="space-y-2">
+                {{ range .Notes }}
+                <li class="item-tile">
+                  <p class="item-title cell-mono">{{ .Address }}:{{ .Port }}</p>
+                  <p class="item-meta">{{ .Note }}</p>
+                  <p class="item-note">Updated {{ .UpdatedAt.Format "2006-01-02 15:04" }}{{ if .UpdatedBy }} by {{ .UpdatedBy }}{{ end }}</p>
+                </li>
+                {{ end }}
+              </ul>
+              {{ else }}
+              <p class="text-sm text-subtle">No host notes for this engagement.</p>
+              {{ end }}
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2 class="card-title">Scans</h2></div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th>Name</th><th>Status</th><th>Path</th><th>Created</th><th></th></tr></thead>
+                <tbody>
+                  {{ range .Scans }}
+                  <tr>
+                    <td><a href="/scans/{{ .ID }}">{{ .Name }}</a></td>
+                    <td>{{ .Status }}</td>
+                    <td class="cell-mono">{{ if .Options.Path }}{{ .Options.Path }}{{ else }}—{{ end }}</td>
+                    <td>{{ .CreatedAt.Format "2006-01-02 15:04" }}</td>
+                    <td class="text-right">
+                      <a class="btn btn-ghost btn-sm" href="/api/v1/scans/{{ .ID }}/score">Score</a>
+                      <a class="btn btn-ghost btn-sm" href="/api/v1/scans/{{ .ID }}/evidence-pack">Evidence</a>
+                    </td>
+                  </tr>
+                  {{ else }}
+                  <tr><td colspan="5" class="table-empty">No scans under this engagement.</td></tr>
+                  {{ end }}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          {{ else }}
+          <section class="card"><div class="card-body"><p class="text-sm text-subtle">Select or create an engagement to continue.</p></div></section>
+          {{ end }}
+        </div>
+      </section>
+    </main>
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+    <script>
+      (function () {
+        var freeze = document.getElementById('freeze-form');
+        if (freeze) {
+          freeze.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            var fd = new FormData(freeze);
+            var targets = String(fd.get('targets') || '').split(/\n+/).map(function (s) { return s.trim(); }).filter(Boolean);
+            var body = { engagement: fd.get('engagement'), targets: targets, note: fd.get('note') || '' };
+            var status = document.getElementById('freeze-status');
+            try {
+              var res = await fetch('/api/v1/engagements/freeze', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+              });
+              if (!res.ok) throw new Error(await res.text());
+              status.textContent = 'Scope frozen.';
+              location.reload();
+            } catch (err) {
+              status.textContent = 'Freeze failed: ' + err.message;
+            }
+          });
+        }
+        var noteForm = document.getElementById('host-note-form');
+        if (noteForm) {
+          noteForm.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            var fd = new FormData(noteForm);
+            var body = {
+              engagement: fd.get('engagement'),
+              address: fd.get('address'),
+              port: Number(fd.get('port') || 3389),
+              note: fd.get('note')
+            };
+            var res = await fetch('/api/v1/host-notes', {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            });
+            if (res.ok) location.reload();
+            else alert('Save note failed');
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>
+{{ end }}

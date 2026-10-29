@@ -1,6 +1,8 @@
 package reporter
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"strings"
@@ -8,6 +10,7 @@ import (
 	"github.com/go-pdf/fpdf"
 
 	"rdpshot/internal/about"
+	"rdpshot/internal/model"
 )
 
 const (
@@ -97,6 +100,9 @@ func pdfPageFooter(doc *fpdf.Fpdf, label string) {
 
 // pdfTitleBlock renders the report title and scan subtitle on page 1.
 func pdfTitleBlock(doc *fpdf.Fpdf, d Data) {
+	if logo := strings.TrimSpace(d.Branding.LogoDataURI); strings.HasPrefix(logo, "data:image/") {
+		pdfEmbedLogo(doc, logo)
+	}
 	doc.SetFont(pdfFontFamily, "B", 20)
 	doc.SetTextColor(33, 47, 61)
 	doc.CellFormat(0, 12, pdfText(pdfReportTitle), "", 1, "L", false, 0, "")
@@ -105,6 +111,33 @@ func pdfTitleBlock(doc *fpdf.Fpdf, d Data) {
 	doc.SetTextColor(100, 100, 100)
 	doc.CellFormat(0, 8, pdfText(subtitle), "", 1, "L", false, 0, "")
 	doc.Ln(4)
+}
+
+func pdfEmbedLogo(doc *fpdf.Fpdf, dataURI string) {
+	comma := strings.Index(dataURI, ",")
+	if comma < 0 {
+		return
+	}
+	meta := dataURI[:comma]
+	raw, err := base64.StdEncoding.DecodeString(dataURI[comma+1:])
+	if err != nil || len(raw) == 0 {
+		return
+	}
+	opts := fpdf.ImageOptions{ReadDpi: true}
+	switch {
+	case strings.Contains(meta, "image/png"):
+		opts.ImageType = "PNG"
+	case strings.Contains(meta, "image/jpeg"), strings.Contains(meta, "image/jpg"):
+		opts.ImageType = "JPG"
+	default:
+		return
+	}
+	info := doc.RegisterImageOptionsReader("brandlogo", opts, bytes.NewReader(raw))
+	if info == nil || doc.Error() != nil {
+		return
+	}
+	doc.ImageOptions("brandlogo", pdfPageMarginMm, doc.GetY(), 36, 0, false, opts, 0, "")
+	doc.Ln(22)
 }
 
 // pdfMetadataTable renders the scan metadata label/value table.
@@ -142,9 +175,12 @@ func pdfExecutiveSummary(doc *fpdf.Fpdf, d Data) {
 	pdfSectionHeading(doc, "Executive Summary")
 	doc.SetFont(pdfFontFamily, "", 8)
 	doc.SetTextColor(45, 45, 45)
+	critical := d.Summary.CountBySeverity(model.SeverityCritical)
 	rows := [][2]string{
+		{"Hardening Score", fmt.Sprintf("%d (%s)", d.HardeningScore, orDash(d.HardeningGrade))},
 		{"Hosts Total", fmt.Sprintf("%d", d.Summary.HostsTotal)},
 		{"Hosts Open", fmt.Sprintf("%d", d.Summary.HostsOpen)},
+		{"Critical Findings", fmt.Sprintf("%d", critical)},
 		{"Findings Total", fmt.Sprintf("%d", d.Summary.FindingsTotal)},
 	}
 	for _, bucket := range severityBuckets(d) {
@@ -154,6 +190,20 @@ func pdfExecutiveSummary(doc *fpdf.Fpdf, d Data) {
 		[2]string{"Credentials Found", fmt.Sprintf("%d", d.Summary.CredsTotal)},
 		[2]string{"Screenshots", fmt.Sprintf("%d", d.Summary.ScreensTotal)},
 	)
+	top := 0
+	for _, f := range sortedFindings(d.Findings) {
+		if f.Status != model.FindingVulnerable && f.Status != model.FindingPotential {
+			continue
+		}
+		top++
+		rows = append(rows, [2]string{
+			fmt.Sprintf("Top finding %d", top),
+			string(f.Severity) + ": " + f.Title + " @ " + f.Address,
+		})
+		if top >= 3 {
+			break
+		}
+	}
 	for _, row := range rows {
 		pdfTableRow(doc, []pdfColumn{
 			{Text: row[0], Width: 50},

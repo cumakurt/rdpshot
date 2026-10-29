@@ -135,12 +135,36 @@
 
               {{ template "wordlist_picker" .Wordlists }}
 
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div class="field">
+                  <label for="scan-base" class="label">Delta base scan (optional)</label>
+                  <input id="scan-base" name="base_scan_id" type="text" placeholder="scan_…" class="input">
+                  <p class="wordlist-hint">Retest only new/changed hosts and open triage findings from this scan.</p>
+                </div>
+                <div class="field">
+                  <label for="scan-path" class="label">Path posture</label>
+                  <select id="scan-path" name="path" class="input">
+                    <option value="">unspecified</option>
+                    <option value="internal">internal</option>
+                    <option value="external">external</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="scan-max-runtime" class="label">Max runtime (sec)</label>
+                  <input id="scan-max-runtime" name="max_runtime_sec" type="number" min="0" placeholder="optional" class="input">
+                </div>
+              </div>
+
               <fieldset class="fieldset">
                 <legend class="fieldset-legend">Checks</legend>
                 <div class="flex flex-col gap-2">
                   <label class="check-row">
                     <input type="checkbox" name="enable_vuln" value="true" checked class="checkbox">
                     Vulnerability checks
+                  </label>
+                  <label class="check-row">
+                    <input type="checkbox" name="enable_discovery" value="true" class="checkbox">
+                    RD Web / Gateway / UDP discovery
                   </label>
                   <label class="check-row">
                     <input type="checkbox" name="enable_auth" value="true" class="checkbox">

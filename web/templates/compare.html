@@ -23,7 +23,7 @@
               <select id="compare-base" name="base" class="input" required>
                 <option value="">Select base…</option>
                 {{ range .Scans }}
-                <option value="{{ .ID }}" {{ if eq $.BaseID .ID }}selected{{ end }}>{{ .Name }} ({{ .CreatedAt.Format "2006-01-02 15:04" }})</option>
+                <option value="{{ .ID }}" {{ if eq $.BaseID .ID }}selected{{ end }}>{{ .Name }}{{ if .Options.Path }} [{{ .Options.Path }}]{{ end }} ({{ .CreatedAt.Format "2006-01-02 15:04" }})</option>
                 {{ end }}
               </select>
             </div>
@@ -32,11 +32,12 @@
               <select id="compare-against" name="against" class="input" required>
                 <option value="">Select against…</option>
                 {{ range .Scans }}
-                <option value="{{ .ID }}" {{ if eq $.AgainstID .ID }}selected{{ end }}>{{ .Name }} ({{ .CreatedAt.Format "2006-01-02 15:04" }})</option>
+                <option value="{{ .ID }}" {{ if eq $.AgainstID .ID }}selected{{ end }}>{{ .Name }}{{ if .Options.Path }} [{{ .Options.Path }}]{{ end }} ({{ .CreatedAt.Format "2006-01-02 15:04" }})</option>
                 {{ end }}
               </select>
             </div>
           </div>
+          <p class="wordlist-hint">Path labels (internal/external) help compare dual-homed posture when both scans set <code>path</code>.</p>
           <button type="submit" class="btn btn-primary">Compare</button>
         </form>
       </section>

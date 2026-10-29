@@ -44,14 +44,30 @@ web UI.
 * **Credential audit (opt-in)** — NLA/CredSSP + NTLMv2 dictionary checks with
   worker pool, jittered pacing, per-host failure budget and lockout
   detection.
-* **Session screenshots (opt-in)** — after a verified login, FreeRDP captures a
-  live session image when available; otherwise a pure-Go session-evidence PNG
-  is stored so slim installs still record proof of authentication.
+* **Session screenshots (opt-in)** — FreeRDP live capture when available; else
+  pure-Go NLA session with slow-path Bitmap Update decode; else evidence-card PNG.
+  Drawing Orders / RDPGFX are not implemented in the Go path.
+* **Hardening score** — 0–100 compliance score (NLA, TLS, cert, crypto, criticals).
+* **Estate map** — `/estate` risk graph of hosts and findings per engagement.
+* **Client-trust checks** — certificate hostname/SAN mismatch and cipher posture.
+* **RD Web / Gateway / UDP discovery** — optional detection-only alternate paths.
+* **Smart credential audit** — high-risk host priority and verified-credential reuse.
+* **Delta retest** — `base_scan_id` limits work to new/changed/open-triage hosts.
+* **Policy-as-code** — declarative pass/fail gate (`GET/PUT /api/v1/policy`) and CI CLI (`rdpshot policy check`).
+* **Engagement workspace** — `/engagements` portal for scope freeze, host notes, and evidence shortcuts.
+* **Remediation playbooks** — static `check_id` guides via `/api/v1/playbooks`.
+* **Scan queue** — `--max-concurrent-scans` (default 2) keeps excess jobs pending; optional `max_runtime_sec`.
+* **Alert rules** — critical / NLA regression / credential-reuse webhooks on scan finish.
+* **Path posture** — label scans `internal`/`external` for dual-homed compare.
+* **Framebuffer deepen** — Fast-Path updates plus PATBLT/SCRBLT/MEMBLT orders (best-effort).
+* **Kerberos offer** — CredSSP advertises Kerberos when a usable ccache/keytab is present.
+* **SIEM streaming** — JSON or CEF webhook on scan completion.
+* **Engagement packs** — evidence ZIP includes `manifest.json` with SHA-256 hashes.
 * **Scan compare** — diff hosts and findings between two audits.
 * **Finding triage** — open / confirmed / false positive / remediated workflow.
 * **Engagements & tags** — label scans for client/scope filtering and trends.
 * **Schedules** — interval or five-field cron cadence with optional webhooks.
-* **Evidence pack** — ZIP export of HTML/CSV/PDF plus screenshots.
+* **Evidence pack** — ZIP export of HTML/CSV/PDF plus screenshots and manifest.
 * **Trend / baseline** — posture time series across completed scans.
 * **Local users & audit log** — optional portal accounts with role-aware sessions.
 * **Named wordlist sets** and report branding metadata.
@@ -80,7 +96,13 @@ web UI.
 | `internal/ntlm` | NTLMv2 message construction and parsing |
 | `internal/credssp` | CredSSP/SPNEGO/TSRequest encoding for NLA authentication |
 | `internal/auth` | RDP NLA authentication with classified error outcomes |
-| `internal/screenshot` | Auto grabber: FreeRDP when available, pure-Go evidence card otherwise |
+| `internal/screenshot` | Auto grabber: FreeRDP → Go bitmap framebuffer → evidence card |
+| `internal/score` | Hardening / compliance scoring |
+| `internal/estate` | Attack-surface graph builder |
+| `internal/policy` | Declarative hardening policy evaluation |
+| `internal/siem` | JSON/CEF event formatting and delivery |
+| `internal/discovery` | RD Web / Gateway / UDP detection probes |
+| `internal/engagement` | Evidence manifest hashing and scope freeze |
 | `internal/store` | SQLite persistence and aggregate queries |
 | `internal/events` | Bounded publish/subscribe hub for live events (SSE) |
 | `internal/reporter` | HTML, CSV and PDF report rendering |
@@ -179,15 +201,30 @@ Flags must come before the target specifications. Targets are one or more of:
 | Command | Purpose | Key flags |
 |---|---|---|
 | `scan` | Run a scan in the foreground | `--name`, `--ports` (default `3389`), `--blacklist`, `--concurrency`, `--rate`, `--timeout`, `--max-targets`, `--max-auth-failures`, `--enable-vuln` (default on), `--enable-auth`, `--enable-screens`, `--ack-authorized`, `--user-wordlist`, `--password-wordlist`, `--report none\|html\|csv\|pdf`, `--report-dir`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format` |
-| `serve` | Start the web UI and REST API | `--addr` (default `127.0.0.1:8722`), `--token`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format`, `--user-wordlist`, `--password-wordlist`, `--max-auth-failures`, `--max-targets` |
+| `serve` | Start the web UI and REST API | `--addr` (default `127.0.0.1:8722`), `--token`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format`, `--user-wordlist`, `--password-wordlist`, `--max-auth-failures`, `--max-targets`, `--max-concurrent-scans` (default `2`) |
 | `report` | Render a stored scan into a report | `--scan <id>` (required), `--format html\|csv\|pdf`, `-o/--output`, `--db` |
+| `policy check` | CI gate against a stored scan | `--scan <id>` (required), `--db`, `--policy path.json` (optional) |
 | `targets` | Resolve targets and print `address:port` lines | `--ports`, `--blacklist`, `--max-targets` |
 | `version` | Print `rdpshot <version>` | — |
 
 Progress and diagnostics go to stderr; results go to stdout. Exit codes:
-`0` success, `1` runtime error (including a cancelled scan), `2` usage or
+`0` success, `1` runtime error (including a cancelled scan or policy fail), `2` usage or
 validation error. In particular, `--enable-auth`/`--enable-screens` without
 `--ack-authorized` exits with code 2 and does not touch the network.
+
+### Policy CI gate
+
+```sh
+rdpshot policy check --db outputs/rdpshot.db --scan <scan-id>
+# exit 0 = pass, exit 1 = fail, exit 2 = error
+```
+
+Example GitHub Actions step:
+
+```yaml
+- name: Policy gate
+  run: rdpshot policy check --db outputs/rdpshot.db --scan "$SCAN_ID"
+```
 
 ## Configuration
 
@@ -232,10 +269,10 @@ reachable beyond localhost, set `--token` (or `RDSHOT_TOKEN`): every route then
 requires `Authorization: Bearer <token>` or `?token=`.
 
 Web pages: `/` dashboard, `/scans` history, `/scans/{id}` live scan detail,
-`/compare` scan diff, `/schedules` recurring audits, `/gallery` screenshot
-gallery, `/reports` report center, `/about` developer credits. Screenshot
-images are served read-only under `/files/`. Every page footer shows the
-build version and developer attribution.
+`/compare` scan diff, `/engagements` workspace, `/schedules` recurring audits,
+`/gallery` screenshot gallery, `/reports` report center, `/about` developer
+credits. Screenshot images are served read-only under `/files/`. Every page
+footer shows the build version and developer attribution.
 
 | Method | Route | Description |
 |---|---|---|
@@ -266,9 +303,24 @@ build version and developer attribution.
 | `GET` | `/api/v1/analytics` | Cross-scan posture analytics |
 | `GET` | `/api/v1/trend` | Posture trend/baseline series |
 | `PATCH` | `/api/v1/findings/{fid}/triage` | Update finding triage status/note |
+| `POST` | `/api/v1/findings/bulk-triage` | Bulk update finding triage |
 | `PATCH` | `/api/v1/scans/{id}/meta` | Update engagement/tags |
-| `GET` | `/api/v1/scans/{id}/evidence-pack` | Download evidence ZIP |
-| `GET/PUT` | `/api/v1/settings/branding` | Report branding metadata |
+| `GET` | `/api/v1/scans/{id}/evidence-pack` | Download evidence ZIP (includes `manifest.json`) |
+| `GET` | `/api/v1/scans/{id}/score` | Hardening / compliance score |
+| `GET` | `/api/v1/scans/{id}/policy` | Evaluate scan against stored policy |
+| `GET` | `/api/v1/scans/{id}/reuse` | Credential reuse across hosts |
+| `GET` | `/api/v1/estate` | Estate risk graph (`engagement`, `scan_id`) |
+| `GET/PUT` | `/api/v1/policy` | Hardening policy document |
+| `GET` | `/api/v1/playbooks` | Remediation playbook catalog |
+| `GET` | `/api/v1/playbooks/{check_id}` | One remediation playbook |
+| `GET/PUT` | `/api/v1/host-notes` | Host notes (PUT upsert) |
+| `DELETE` | `/api/v1/host-notes/{id}` | Delete a host note |
+| `GET/PUT` | `/api/v1/settings/siem` | SIEM webhook sink (JSON/CEF) |
+| `GET/PUT` | `/api/v1/settings/alerts` | Post-scan alert rules |
+| `GET` | `/api/v1/engagements` | List engagement labels |
+| `POST` | `/api/v1/engagements/freeze` | Freeze engagement scope snapshot |
+| `GET` | `/api/v1/engagements/scope` | Load frozen engagement scope |
+| `GET/PUT` | `/api/v1/settings/branding` | Report branding metadata (incl. logo data URI) |
 | `GET/POST` | `/api/v1/wordlist-sets` | Named wordlist sets |
 | `DELETE` | `/api/v1/wordlist-sets/{id}` | Delete a wordlist set |
 | `POST` | `/api/v1/login` | Local user login (session token) |

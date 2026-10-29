@@ -93,3 +93,45 @@ func (s *Server) requireWrite(w http.ResponseWriter, r *http.Request) bool {
 	s.writeAPIError(w, http.StatusForbidden, "operator role required")
 	return false
 }
+
+func (s *Server) requireIntrusive(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.Token != "" {
+		got := tokenFromRequest(r)
+		want := sha256.Sum256([]byte(s.cfg.Token))
+		hash := sha256.Sum256([]byte(got))
+		if subtle.ConstantTimeCompare(hash[:], want[:]) == 1 {
+			return true
+		}
+	}
+	sess := s.sessionFromRequest(r)
+	if sess != nil && sess.Role.CanIntrusive() {
+		return true
+	}
+	n, err := s.deps.Store.UserCount()
+	if err != nil || n == 0 {
+		return true
+	}
+	s.writeAPIError(w, http.StatusForbidden, "operator role required for intrusive actions")
+	return false
+}
+
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.Token != "" {
+		got := tokenFromRequest(r)
+		want := sha256.Sum256([]byte(s.cfg.Token))
+		hash := sha256.Sum256([]byte(got))
+		if subtle.ConstantTimeCompare(hash[:], want[:]) == 1 {
+			return true
+		}
+	}
+	sess := s.sessionFromRequest(r)
+	if sess != nil && sess.Role.CanAdmin() {
+		return true
+	}
+	n, err := s.deps.Store.UserCount()
+	if err != nil || n == 0 {
+		return true
+	}
+	s.writeAPIError(w, http.StatusForbidden, "admin role required")
+	return false
+}

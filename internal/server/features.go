@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"rdpshot/internal/engagement"
 	"rdpshot/internal/model"
 	"rdpshot/internal/notify"
 	"rdpshot/internal/reporter"
@@ -144,12 +145,17 @@ func (s *Server) handleEvidencePack(w http.ResponseWriter, r *http.Request) {
 		return err
 	}
 
+	packFiles := map[string][]byte{}
+
 	meta, _ := json.MarshalIndent(map[string]any{
 		"scan":      scan,
 		"generated": time.Now().UTC(),
 		"branding":  data.Branding,
 		"tool":      data.ToolVersion,
+		"score":     data.HardeningScore,
+		"grade":     data.HardeningGrade,
 	}, "", "  ")
+	packFiles["meta.json"] = meta
 	if err := writeBytes("meta.json", meta); err != nil {
 		s.internalError(w, r, "write meta", err)
 		return
@@ -160,6 +166,7 @@ func (s *Server) handleEvidencePack(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "render html pack", err)
 		return
 	}
+	packFiles["report.html"] = htmlBuf.Bytes()
 	_ = writeBytes("report.html", htmlBuf.Bytes())
 
 	var csvBuf bytes.Buffer
@@ -167,10 +174,12 @@ func (s *Server) handleEvidencePack(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "render csv pack", err)
 		return
 	}
+	packFiles["findings.csv"] = csvBuf.Bytes()
 	_ = writeBytes("findings.csv", csvBuf.Bytes())
 
 	var pdfBuf bytes.Buffer
 	if err := reporter.PDF(&pdfBuf, data); err == nil {
+		packFiles["report.pdf"] = pdfBuf.Bytes()
 		_ = writeBytes("report.pdf", pdfBuf.Bytes())
 	}
 
@@ -185,8 +194,16 @@ func (s *Server) handleEvidencePack(w http.ResponseWriter, r *http.Request) {
 		if name == "." || name == "/" || name == "" {
 			name = fmt.Sprintf("shot-%d.png", i+1)
 		}
+		packFiles["screenshots/"+name] = raw
 		_ = writeBytes("screenshots/"+name, raw)
 	}
+
+	manifest, err := engagement.BuildManifest(scan, packFiles)
+	if err == nil {
+		raw, _ := json.MarshalIndent(manifest, "", "  ")
+		_ = writeBytes("manifest.json", raw)
+	}
+
 	if err := zw.Close(); err != nil {
 		s.internalError(w, r, "close evidence zip", err)
 		return
@@ -271,7 +288,10 @@ func (s *Server) handleGetBranding(w http.ResponseWriter, r *http.Request) {
 
 // handlePutBranding updates report branding settings.
 func (s *Server) handlePutBranding(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
 	var b model.ReportBranding
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		s.writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
@@ -281,6 +301,11 @@ func (s *Server) handlePutBranding(w http.ResponseWriter, r *http.Request) {
 	b.Engagement = strings.TrimSpace(b.Engagement)
 	b.PreparedBy = strings.TrimSpace(b.PreparedBy)
 	b.FooterNote = strings.TrimSpace(b.FooterNote)
+	b.LogoDataURI = strings.TrimSpace(b.LogoDataURI)
+	if b.LogoDataURI != "" && !strings.HasPrefix(b.LogoDataURI, "data:image/") {
+		s.writeAPIError(w, http.StatusBadRequest, "logo_data_uri must be a data:image/... URI")
+		return
+	}
 	if err := s.deps.Store.SetReportBranding(b); err != nil {
 		s.internalError(w, r, "set branding", err)
 		return
@@ -304,6 +329,9 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 // handleCreateUser creates a local portal account.
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 	var payload struct {
 		Username string         `json:"username"`
@@ -342,6 +370,9 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteUser removes a local portal account.
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	id := r.PathValue("id")
 	if err := s.deps.Store.DeleteUser(id); errors.Is(err, store.ErrNotFound) {
 		s.writeAPIError(w, http.StatusNotFound, "user not found")

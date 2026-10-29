@@ -16,6 +16,7 @@ import (
 	"rdpshot/internal/about"
 	"rdpshot/internal/model"
 	"rdpshot/internal/reporter"
+	"rdpshot/internal/score"
 	"rdpshot/internal/target"
 )
 
@@ -29,6 +30,9 @@ type scanCreated struct {
 // the scan engine in the background. Any number of scans may run at once; each
 // one gets its own worker pool and pause control.
 func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWrite(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	if !s.parseScanForm(w, r) {
 		return
@@ -60,11 +64,38 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	enableVuln := formBool(form.Get("enable_vuln"))
 	enableAuth := formBool(form.Get("enable_auth"))
 	enableScreens := formBool(form.Get("enable_screens"))
+	enableDiscovery := formBool(form.Get("enable_discovery"))
 	ack := formBool(form.Get("ack_authorized"))
 	if (enableAuth || enableScreens) && !ack {
 		s.writeAPIError(w, http.StatusBadRequest,
 			"credential checks and screenshots require the authorization acknowledgement")
 		return
+	}
+	if (enableAuth || enableScreens) && !s.requireIntrusive(w, r) {
+		return
+	}
+	pathLabel := strings.ToLower(strings.TrimSpace(form.Get("path")))
+	switch pathLabel {
+	case "", "internal", "external":
+	default:
+		s.writeAPIError(w, http.StatusBadRequest, "path must be internal, external, or empty")
+		return
+	}
+	maxRuntimeSec := 0
+	if raw := strings.TrimSpace(form.Get("max_runtime_sec")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			s.writeAPIError(w, http.StatusBadRequest, "max_runtime_sec must be a non-negative integer")
+			return
+		}
+		maxRuntimeSec = n
+	}
+	baseScanID := strings.TrimSpace(form.Get("base_scan_id"))
+	if baseScanID != "" {
+		if _, err := s.deps.Store.GetScan(baseScanID); err != nil {
+			s.writeAPIError(w, http.StatusBadRequest, "base_scan_id not found")
+			return
+		}
 	}
 
 	ports, err := target.ParsePorts(form.Get("ports"))
@@ -161,9 +192,13 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 			EnableVuln:       enableVuln,
 			EnableAuth:       enableAuth,
 			EnableScreens:    enableScreens,
+			EnableDiscovery:  enableDiscovery,
 			MaxAuthFailures:  defaultMaxAuthFailures,
 			UserWordlist:     userWordlist,
 			PasswordWordlist: passwordWordlist,
+			BaseScanID:       baseScanID,
+			Path:             pathLabel,
+			MaxRuntimeSec:    maxRuntimeSec,
 			Acknowledged:     ack,
 		},
 	}
@@ -262,15 +297,19 @@ func (s *Server) handleResumeScan(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusAccepted, map[string]string{"status": "running"})
 }
 
-// handleDeleteScan removes a finished scan and the artifacts it owns.
+// handleDeleteScan removes a scan and the artifacts it owns. Active runs are
+// cancelled first so paused/running scans can be deleted from the list UI.
 func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
+	if !s.requireIntrusive(w, r) {
+		return
+	}
 	scan, ok := s.loadScan(w, r, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	if !scan.Status.Terminal() || s.scanControl(scan.ID) != nil {
-		s.writeAPIError(w, http.StatusConflict, "cancel the scan before deleting it")
-		return
+	if s.cancelScan(scan.ID) || !scan.Status.Terminal() {
+		scan.Status = model.ScanCancelled
+		_ = s.deps.Store.UpdateScan(scan)
 	}
 	screens, err := s.deps.Store.ListScreenshots(scan.ID)
 	if err != nil {
@@ -287,6 +326,7 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	}
 	s.removeScanUploads(scan.ID)
 	s.removeScanScreenshots(paths)
+	s.audit(r, "scan.delete", scan.ID, string(scan.Status))
 	s.deps.Logger.Info("scan deleted", "scan_id", scan.ID)
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": scan.ID})
 }
@@ -342,6 +382,9 @@ func (s *Server) handleRenameScan(w http.ResponseWriter, r *http.Request) {
 // by an earlier scan. Reconnaissance runs again (it is required for the
 // authentication handshake) but vulnerability checks and screenshots are off.
 func (s *Server) handleBruteForceScan(w http.ResponseWriter, r *http.Request) {
+	if !s.requireIntrusive(w, r) {
+		return
+	}
 	parent, ok := s.loadScan(w, r, r.PathValue("id"))
 	if !ok {
 		return
@@ -754,17 +797,20 @@ func (s *Server) reportData(scan model.Scan) (reporter.Data, error) {
 	if branding.Engagement == "" {
 		branding.Engagement = scan.Engagement
 	}
+	sc := score.EvaluateScan(scan.ID, hosts, findings)
 	return reporter.Data{
-		Scan:        scan,
-		Summary:     summary,
-		Hosts:       hosts,
-		Findings:    findings,
-		Credentials: maskCredentials(creds),
-		Screens:     screenshotViews(screens),
-		CVEStats:    cveStats,
-		GeneratedAt: time.Now().UTC(),
-		ToolVersion: s.cfg.ToolVersion,
-		Branding:    branding,
+		Scan:           scan,
+		Summary:        summary,
+		Hosts:          hosts,
+		Findings:       findings,
+		Credentials:    maskCredentials(creds),
+		Screens:        screenshotViews(screens),
+		CVEStats:       cveStats,
+		GeneratedAt:    time.Now().UTC(),
+		ToolVersion:    s.cfg.ToolVersion,
+		Branding:       branding,
+		HardeningScore: sc.Score,
+		HardeningGrade: sc.Grade,
 	}, nil
 }
 

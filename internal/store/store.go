@@ -23,7 +23,7 @@ import (
 var ErrScanNotFound = errors.New("store: scan not found")
 
 // schemaVersion is the current on-disk schema revision.
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS scans (
@@ -139,6 +139,16 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS host_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  engagement TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL DEFAULT '',
+  UNIQUE(engagement, address, port)
+);
 CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id, severity);
 CREATE INDEX IF NOT EXISTS idx_hosts_scan ON hosts(scan_id);
 CREATE INDEX IF NOT EXISTS idx_credentials_scan ON credentials(scan_id);
@@ -198,8 +208,32 @@ func (s *Store) migrate() error {
 	if err := s.migrateToV3(); err != nil {
 		return err
 	}
+	if err := s.migrateToV4(); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("store: update schema version: %w", err)
+	}
+	return nil
+}
+
+// migrateToV4 adds host_notes used by the engagement workspace.
+func (s *Store) migrateToV4() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS host_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  engagement TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL DEFAULT '',
+  UNIQUE(engagement, address, port)
+);
+CREATE INDEX IF NOT EXISTS idx_host_notes_engagement ON host_notes(engagement);
+`)
+	if err != nil {
+		return fmt.Errorf("store: migrate v4: %w", err)
 	}
 	return nil
 }
@@ -577,6 +611,34 @@ func (s *Store) UpsertHost(h model.Host) (int64, error) {
 	return id, nil
 }
 
+// GetHost loads one host by id.
+func (s *Store) GetHost(id int64) (model.Host, error) {
+	row := s.db.QueryRow(
+		`SELECT id, scan_id, address, port, state, service_json, updated_at FROM hosts WHERE id = ?`, id)
+	var (
+		h           model.Host
+		port        int
+		serviceJSON string
+		updatedAt   string
+	)
+	if err := row.Scan(&h.ID, &h.ScanID, &h.Endpoint.Address, &port, &h.State, &serviceJSON, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Host{}, fmt.Errorf("store: get host %d: %w", id, ErrNotFound)
+		}
+		return model.Host{}, fmt.Errorf("store: get host %d: %w", id, err)
+	}
+	h.Endpoint.Port = uint16(port)
+	h.UpdatedAt = parseTime(updatedAt)
+	if serviceJSON != "" {
+		var svc model.ServiceInfo
+		if err := json.Unmarshal([]byte(serviceJSON), &svc); err != nil {
+			return model.Host{}, fmt.Errorf("store: decode service info for host %d: %w", id, err)
+		}
+		h.Service = &svc
+	}
+	return h, nil
+}
+
 // ListHosts returns all hosts of a scan ordered by address and port.
 func (s *Store) ListHosts(scanID string) ([]model.Host, error) {
 	rows, err := s.db.Query(
@@ -928,6 +990,7 @@ type hostAgg struct {
 	risk         model.HostRisk
 	serviceKnown bool
 	certKnown    bool
+	certNotAfter time.Time
 }
 
 // Analytics aggregates posture statistics across every stored scan.
@@ -972,6 +1035,7 @@ func (s *Store) Analytics() (model.Analytics, error) {
 				if h.Service.Certificate != nil {
 					agg.certKnown = true
 					agg.risk.SelfSigned = h.Service.Certificate.SelfSigned
+					agg.certNotAfter = h.Service.Certificate.NotAfter
 				}
 			}
 			hosts[key] = agg
@@ -1045,6 +1109,13 @@ func (s *Store) Analytics() (model.Analytics, error) {
 		}
 		if agg.certKnown && agg.risk.SelfSigned {
 			a.SelfSigned++
+		}
+		if agg.certKnown && !agg.certNotAfter.IsZero() {
+			until := time.Until(agg.certNotAfter)
+			if until >= 0 && until <= 30*24*time.Hour {
+				a.CertsExpiring30d++
+				a.ExpiringCerts = append(a.ExpiringCerts, agg.risk)
+			}
 		}
 	}
 

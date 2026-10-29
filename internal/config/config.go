@@ -20,31 +20,33 @@ type Config struct {
 	Concurrency      int           `json:"concurrency"`
 	Rate             float64       `json:"rate"`
 	Timeout          time.Duration `json:"timeout"`
-	MaxTargets       int           `json:"max_targets"`
-	MaxAuthFailures  int           `json:"max_auth_failures"`
-	Addr             string        `json:"addr"`
-	Token            string        `json:"token"`
-	LogLevel         string        `json:"log_level"`
-	LogFormat        string        `json:"log_format"`
-	UserWordlist     string        `json:"user_wordlist"`
-	PasswordWordlist string        `json:"password_wordlist"`
+	MaxTargets         int           `json:"max_targets"`
+	MaxAuthFailures    int           `json:"max_auth_failures"`
+	MaxConcurrentScans int           `json:"max_concurrent_scans"`
+	Addr               string        `json:"addr"`
+	Token              string        `json:"token"`
+	LogLevel           string        `json:"log_level"`
+	LogFormat          string        `json:"log_format"`
+	UserWordlist       string        `json:"user_wordlist"`
+	PasswordWordlist   string        `json:"password_wordlist"`
 }
 
 // Default returns the built-in configuration values.
 func Default() Config {
 	return Config{
-		DBPath:           "outputs/rdpshot.db",
-		OutputsDir:       "outputs",
-		Concurrency:      64,
-		Rate:             10,
-		Timeout:          5 * time.Second,
-		MaxTargets:       0, // 0 = unlimited CIDR expansion
-		MaxAuthFailures:  5,
-		Addr:             "127.0.0.1:8722",
-		LogLevel:         "info",
-		LogFormat:        "text",
-		UserWordlist:     "wordlists/default_users.txt",
-		PasswordWordlist: "wordlists/default_passwords.txt",
+		DBPath:             "outputs/rdpshot.db",
+		OutputsDir:         "outputs",
+		Concurrency:        64,
+		Rate:               10,
+		Timeout:            5 * time.Second,
+		MaxTargets:         0, // 0 = unlimited CIDR expansion
+		MaxAuthFailures:    5,
+		MaxConcurrentScans: 2,
+		Addr:               "127.0.0.1:8722",
+		LogLevel:           "info",
+		LogFormat:          "text",
+		UserWordlist:       "wordlists/default_users.txt",
+		PasswordWordlist:   "wordlists/default_passwords.txt",
 	}
 }
 
@@ -102,6 +104,7 @@ func (c *Config) applyEnv(lookup func(string) (string, bool)) error {
 		{"RDSHOT_CONCURRENCY", &c.Concurrency},
 		{"RDSHOT_MAX_TARGETS", &c.MaxTargets},
 		{"RDSHOT_MAX_AUTH_FAILURES", &c.MaxAuthFailures},
+		{"RDSHOT_MAX_CONCURRENT_SCANS", &c.MaxConcurrentScans},
 	}
 	for _, s := range ints {
 		v, ok := lookup(s.key)
@@ -153,6 +156,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxAuthFailures < 0 {
 		return fmt.Errorf("config: max_auth_failures must not be negative, got %d", c.MaxAuthFailures)
+	}
+	if c.MaxConcurrentScans < 0 {
+		return fmt.Errorf("config: max_concurrent_scans must not be negative (0 uses default 2), got %d", c.MaxConcurrentScans)
 	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":

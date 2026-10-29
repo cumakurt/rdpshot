@@ -73,6 +73,9 @@ type Config struct {
 	// MaxTargets bounds CIDR/host expansion for one API or schedule request.
 	// Zero means unlimited.
 	MaxTargets int
+	// MaxConcurrentScans bounds how many engine runs execute at once.
+	// Zero defaults to 2. Excess scans stay pending until a slot frees.
+	MaxConcurrentScans int
 }
 
 // Dependencies are the collaborators the server reads from and starts work on.
@@ -110,6 +113,9 @@ type Server struct {
 	// sessions holds short-lived login tokens for local portal users.
 	sessionsMu sync.Mutex
 	sessions   map[string]*session
+
+	// scanSlots limits concurrent engine runs; waiters stay pending.
+	scanSlots chan struct{}
 }
 
 // New builds a server from configuration and dependencies.
@@ -133,6 +139,10 @@ func New(cfg Config, deps Dependencies) (*Server, error) {
 	if cfg.MaxTargets > absoluteMaxScanTargets {
 		cfg.MaxTargets = absoluteMaxScanTargets
 	}
+	maxConc := cfg.MaxConcurrentScans
+	if maxConc <= 0 {
+		maxConc = 2
+	}
 	s := &Server{
 		cfg:              cfg,
 		deps:             deps,
@@ -140,6 +150,7 @@ func New(cfg Config, deps Dependencies) (*Server, error) {
 		runs:             make(map[string]*scanRun),
 		userWordlist:     cfg.UserWordlist,
 		passwordWordlist: cfg.PasswordWordlist,
+		scanSlots:        make(chan struct{}, maxConc),
 	}
 	s.handler = s.routes()
 	if deps.Hub != nil {
@@ -233,6 +244,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /scans", s.handleScans)
 	mux.HandleFunc("GET /scans/{id}", s.handleScanDetail)
 	mux.HandleFunc("GET /compare", s.handleCompare)
+	mux.HandleFunc("GET /estate", s.handleEstatePage)
+	mux.HandleFunc("GET /engagements", s.handleEngagementsPage)
 	mux.HandleFunc("GET /schedules", s.handleSchedulesPage)
 	mux.HandleFunc("GET /gallery", s.handleGallery)
 	mux.HandleFunc("GET /reports", s.handleReports)
@@ -279,6 +292,25 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/findings/{fid}/triage", s.handleUpdateFindingTriage)
 	mux.HandleFunc("PATCH /api/v1/scans/{id}/meta", s.handleUpdateScanMeta)
 	mux.HandleFunc("GET /api/v1/scans/{id}/evidence-pack", s.handleEvidencePack)
+	mux.HandleFunc("GET /api/v1/scans/{id}/score", s.handleScanScore)
+	mux.HandleFunc("GET /api/v1/scans/{id}/policy", s.handleScanPolicy)
+	mux.HandleFunc("GET /api/v1/scans/{id}/reuse", s.handleCredentialReuse)
+	mux.HandleFunc("GET /api/v1/estate", s.handleEstate)
+	mux.HandleFunc("GET /api/v1/policy", s.handleGetPolicy)
+	mux.HandleFunc("PUT /api/v1/policy", s.handlePutPolicy)
+	mux.HandleFunc("GET /api/v1/settings/siem", s.handleGetSIEM)
+	mux.HandleFunc("PUT /api/v1/settings/siem", s.handlePutSIEM)
+	mux.HandleFunc("POST /api/v1/engagements/freeze", s.handleFreezeEngagement)
+	mux.HandleFunc("GET /api/v1/engagements/scope", s.handleGetEngagementScope)
+	mux.HandleFunc("GET /api/v1/engagements", s.handleListEngagements)
+	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
+	mux.HandleFunc("GET /api/v1/playbooks/{check_id}", s.handleGetPlaybook)
+	mux.HandleFunc("POST /api/v1/findings/bulk-triage", s.handleBulkTriage)
+	mux.HandleFunc("GET /api/v1/host-notes", s.handleListHostNotes)
+	mux.HandleFunc("PUT /api/v1/host-notes", s.handleUpsertHostNote)
+	mux.HandleFunc("DELETE /api/v1/host-notes/{id}", s.handleDeleteHostNote)
+	mux.HandleFunc("GET /api/v1/settings/alerts", s.handleGetAlertRules)
+	mux.HandleFunc("PUT /api/v1/settings/alerts", s.handlePutAlertRules)
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 
 	// Catch-all: unknown paths render the small HTML error page (or JSON when
@@ -322,7 +354,7 @@ type scanRun struct {
 }
 
 // startScan registers a cancellable run for a freshly created scan and starts
-// the scan engine in the background.
+// the scan engine in the background once a concurrency slot is available.
 func (s *Server) startScan(scan model.Scan, endpoints []model.Endpoint) {
 	ctx, cancel := context.WithCancel(context.Background())
 	control := scanner.NewRunControl(func(status model.ScanStatus, progress model.Progress) {
@@ -340,15 +372,30 @@ func (s *Server) startScan(scan model.Scan, endpoints []model.Endpoint) {
 			cancel()
 			s.runsWG.Done()
 		}()
-		// The engine mutates the scan record; hand it a private copy.
+		select {
+		case s.scanSlots <- struct{}{}:
+			defer func() { <-s.scanSlots }()
+		case <-ctx.Done():
+			finished, err := s.deps.Store.GetScan(scan.ID)
+			if err == nil && finished.Status == model.ScanPending {
+				finished.Status = model.ScanCancelled
+				now := time.Now().UTC()
+				finished.FinishedAt = &now
+				_ = s.deps.Store.UpdateScan(finished)
+			}
+			return
+		}
 		running := scan
 		s.deps.Engine.RunWithControl(ctx, &running, endpoints, control)
 		finished, err := s.deps.Store.GetScan(scan.ID)
 		if err == nil {
 			s.maybeNotifyScan(finished)
+			s.maybeStreamSIEM(finished)
+			s.maybeFireAlerts(finished)
 		}
 	}()
-	s.deps.Logger.Info("scan queued", "scan_id", scan.ID, "endpoints", len(endpoints))
+	s.deps.Logger.Info("scan queued", "scan_id", scan.ID, "endpoints", len(endpoints),
+		"max_concurrent", cap(s.scanSlots))
 }
 
 // persistScanState stores a pause/resume transition and its progress snapshot.

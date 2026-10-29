@@ -22,18 +22,35 @@
         <div class="page-actions">
           {{ if eq .Scan.Status "running" }}
           <button type="button" data-pause-scan="{{ .Scan.ID }}" class="btn btn-ghost">Pause</button>
-          <button type="button" data-cancel-scan="{{ .Scan.ID }}" class="btn btn-danger">Cancel</button>
+          <button type="button" data-cancel-scan="{{ .Scan.ID }}" class="btn btn-ghost">Cancel</button>
           {{ else if eq .Scan.Status "paused" }}
           <button type="button" data-resume-scan="{{ .Scan.ID }}" class="btn btn-primary">Resume</button>
-          <button type="button" data-cancel-scan="{{ .Scan.ID }}" class="btn btn-danger">Cancel</button>
-          {{ else if or (eq .Scan.Status "completed") (eq .Scan.Status "failed") (eq .Scan.Status "cancelled") }}
-          <button type="button" data-delete-scan="{{ .Scan.ID }}" class="btn btn-danger">Delete</button>
-          {{ else }}
-          <button type="button" data-cancel-scan="{{ .Scan.ID }}" class="btn btn-danger">Cancel</button>
+          <button type="button" data-cancel-scan="{{ .Scan.ID }}" class="btn btn-ghost">Cancel</button>
+          {{ else if eq .Scan.Status "pending" }}
+          <button type="button" data-cancel-scan="{{ .Scan.ID }}" class="btn btn-ghost">Cancel</button>
           {{ end }}
+          <button type="button" data-delete-scan="{{ .Scan.ID }}" class="btn btn-danger">Delete</button>
           <a href="/api/v1/scans/{{ .Scan.ID }}/report?format=pdf" class="btn btn-ghost">PDF</a>
           <a href="/api/v1/scans/{{ .Scan.ID }}/evidence-pack" class="btn btn-primary">Evidence pack</a>
         </div>
+      </section>
+
+      <section class="stat-grid mb-6" aria-label="Hardening score">
+        <article class="stat-card">
+          <div class="stat-top">
+            <p class="stat-label">Hardening score</p>
+          </div>
+          <p class="stat-value">{{ .Score.Score }}</p>
+          <p class="stat-meta">Grade {{ .Score.Grade }} · {{ .Score.HostsScored }} hosts · <a href="/api/v1/scans/{{ .Scan.ID }}/score">JSON</a> · <a href="/api/v1/scans/{{ .Scan.ID }}/policy">Policy</a></p>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top">
+            <p class="stat-label">Estate / reuse</p>
+          </div>
+          <p class="stat-meta mt-3"><a href="/estate?engagement={{ .Scan.Engagement }}">Open estate map</a></p>
+          <p class="stat-meta"><a href="/api/v1/scans/{{ .Scan.ID }}/reuse">Credential reuse report</a></p>
+          <p class="stat-meta"><a href="/api/v1/scans/{{ .Scan.ID }}/evidence-pack">Evidence pack + manifest</a></p>
+        </article>
       </section>
 
       <section class="card mb-6">
@@ -98,12 +115,22 @@
         <div class="card lg:col-span-3">
           <div class="card-head">
             <h2 class="card-title">Findings</h2>
-            <span class="badge badge-slate">{{ len .Findings }} total</span>
+            <div class="flex items-center gap-2">
+              <span class="badge badge-slate">{{ len .Findings }} total</span>
+              <select id="bulk-triage-status" class="input input-sm" aria-label="Bulk triage status">
+                <option value="open">open</option>
+                <option value="confirmed">confirmed</option>
+                <option value="false_positive">false positive</option>
+                <option value="remediated">remediated</option>
+              </select>
+              <button type="button" class="btn btn-ghost btn-sm" id="bulk-triage-apply">Apply</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table class="table">
               <thead>
                 <tr>
+                  <th><input type="checkbox" id="findings-select-all" aria-label="Select all findings"></th>
                   <th>Address</th>
                   <th>Port</th>
                   <th>Title</th>
@@ -118,11 +145,12 @@
                 {{ if .Findings }}
                   {{ range $i, $f := .Findings }}
                   <tr class="row-hover cursor-pointer" data-finding-row="{{ $i }}">
+                    <td><input type="checkbox" class="checkbox" data-finding-select="{{ $f.ID }}" onclick="event.stopPropagation()"></td>
                     <td class="cell-mono cell-strong">{{ $f.Address }}</td>
                     <td class="cell-mono">{{ $f.Port }}</td>
                     <td>
                       <p class="cell-strong">{{ $f.Title }}</p>
-                      <p class="cell-sub">{{ $f.CheckID }}</p>
+                      <p class="cell-sub">{{ $f.CheckID }} · <a href="/api/v1/playbooks/{{ $f.CheckID }}" onclick="event.stopPropagation()">Playbook</a></p>
                     </td>
                     <td>
                       {{ if eq $f.Severity "critical" }}<span class="badge badge-rose">{{ $f.Severity }}</span>{{ else if eq $f.Severity "high" }}<span class="badge badge-orange">{{ $f.Severity }}</span>{{ else if eq $f.Severity "medium" }}<span class="badge badge-amber">{{ $f.Severity }}</span>{{ else if eq $f.Severity "low" }}<span class="badge badge-sky">{{ $f.Severity }}</span>{{ else }}<span class="badge badge-slate">{{ $f.Severity }}</span>{{ end }}
@@ -146,7 +174,7 @@
                     </td>
                   </tr>
                   <tr data-finding-details="{{ $i }}" hidden>
-                    <td colspan="8">
+                    <td colspan="9">
                       <div class="space-y-3">
                         <div class="panel">
                           <h3 class="panel-title">Evidence</h3>
@@ -155,6 +183,7 @@
                         <div class="panel">
                           <h3 class="panel-title">Remediation</h3>
                           <p class="panel-body">{{ $f.Remediation }}</p>
+                          <p class="mt-2 text-xs"><a href="/api/v1/playbooks/{{ $f.CheckID }}">Open remediation playbook (JSON)</a></p>
                         </div>
                         <div class="panel">
                           <h3 class="panel-title">Triage note</h3>
@@ -170,7 +199,7 @@
                   {{ end }}
                 {{ else }}
                   <tr>
-                    <td colspan="8" class="table-empty">
+                    <td colspan="9" class="table-empty">
                       No findings recorded for this scan.
                     </td>
                   </tr>
@@ -232,7 +261,7 @@
       <section class="card">
         <div class="card-head">
           <h2 class="card-title">Discovered Hosts</h2>
-          <span class="badge badge-slate">{{ len .Hosts }} hosts</span>
+          <span class="badge badge-slate">{{ len .Hosts }} RDP hosts</span>
         </div>
         <form id="brute-scan-form" method="post" action="/api/v1/scans/{{ .Scan.ID }}/brute" enctype="multipart/form-data">
           <div class="table-wrap">
@@ -255,14 +284,12 @@
                   {{ range .Hosts }}
                   <tr class="row-hover">
                     <td>
-                      {{ if eq .State "open" }}
                       <input type="checkbox" name="hosts" value="{{ .Endpoint.Address }}:{{ .Endpoint.Port }}" class="checkbox" data-brute-host>
-                      {{ end }}
                     </td>
                     <td class="cell-mono cell-strong">{{ .Endpoint.Address }}</td>
                     <td class="cell-mono">{{ .Endpoint.Port }}</td>
                     <td>
-                      {{ if eq .State "open" }}<span class="badge badge-emerald">{{ .State }}</span>{{ else if eq .State "closed" }}<span class="badge badge-slate">{{ .State }}</span>{{ else }}<span class="badge badge-amber">{{ .State }}</span>{{ end }}
+                      <span class="badge badge-emerald">{{ .State }}</span>
                     </td>
                     <td>
                       {{ if .Service }}
@@ -293,7 +320,7 @@
                 {{ else }}
                   <tr>
                     <td colspan="9" class="table-empty">
-                      No hosts probed yet.
+                      No RDP hosts discovered yet.
                     </td>
                   </tr>
                 {{ end }}

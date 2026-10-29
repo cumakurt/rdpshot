@@ -427,6 +427,9 @@ func (s *Store) ListAudit(limit int) ([]model.AuditEntry, error) {
 }
 
 const brandingSettingsKey = "report_branding"
+const policySettingsKey = "hardening_policy"
+const siemSettingsKey = "siem_sink"
+const alertRulesSettingsKey = "alert_rules"
 
 // GetReportBranding loads report branding settings.
 func (s *Store) GetReportBranding() (model.ReportBranding, error) {
@@ -460,4 +463,100 @@ func (s *Store) SetReportBranding(b model.ReportBranding) error {
 		return fmt.Errorf("store: set branding: %w", err)
 	}
 	return nil
+}
+
+// GetSettingJSON loads a raw JSON settings document by key.
+func (s *Store) GetSettingJSON(key string) (json.RawMessage, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT value_json FROM settings WHERE key = ?`, key).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get setting %q: %w", key, err)
+	}
+	return json.RawMessage(raw), nil
+}
+
+// SetSettingJSON stores a JSON settings document by key.
+func (s *Store) SetSettingJSON(key string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("store: encode setting %q: %w", key, err)
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO settings (key, value_json) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`,
+		key, string(raw),
+	)
+	if err != nil {
+		return fmt.Errorf("store: set setting %q: %w", key, err)
+	}
+	return nil
+}
+
+// PolicySettingsKey is the settings key for the hardening policy document.
+func PolicySettingsKey() string { return policySettingsKey }
+
+// SIEMSettingsKey is the settings key for the SIEM sink configuration.
+func SIEMSettingsKey() string { return siemSettingsKey }
+
+// AlertRulesSettingsKey is the settings key for post-scan alert rules.
+func AlertRulesSettingsKey() string { return alertRulesSettingsKey }
+
+// GetAlertRules loads alert rule settings.
+func (s *Store) GetAlertRules() (model.AlertRules, error) {
+	raw, err := s.GetSettingJSON(alertRulesSettingsKey)
+	if err != nil {
+		return model.AlertRules{}, err
+	}
+	if len(raw) == 0 {
+		return model.AlertRules{}, nil
+	}
+	var rules model.AlertRules
+	if err := json.Unmarshal(raw, &rules); err != nil {
+		return model.AlertRules{}, fmt.Errorf("store: decode alert rules: %w", err)
+	}
+	return rules, nil
+}
+
+// SetAlertRules stores alert rule settings.
+func (s *Store) SetAlertRules(rules model.AlertRules) error {
+	return s.SetSettingJSON(alertRulesSettingsKey, rules)
+}
+
+// BulkUpdateFindingTriage applies the same triage state to many findings.
+func (s *Store) BulkUpdateFindingTriage(ids []int64, status model.TriageStatus, note string) (int, error) {
+	if !status.Valid() {
+		return 0, fmt.Errorf("store: invalid triage status %q", status)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	now := formatTime(time.Now().UTC())
+	note = strings.TrimSpace(note)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("store: begin bulk triage: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(
+		`UPDATE findings SET triage_status = ?, triage_note = ?, triage_updated_at = ? WHERE id = ?`)
+	if err != nil {
+		return 0, fmt.Errorf("store: prepare bulk triage: %w", err)
+	}
+	defer stmt.Close()
+	updated := 0
+	for _, id := range ids {
+		res, err := stmt.Exec(string(status), note, now, id)
+		if err != nil {
+			return 0, fmt.Errorf("store: bulk triage %d: %w", id, err)
+		}
+		n, _ := res.RowsAffected()
+		updated += int(n)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: commit bulk triage: %w", err)
+	}
+	return updated, nil
 }

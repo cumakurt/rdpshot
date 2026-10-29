@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"rdpshot/internal/config"
 	"rdpshot/internal/events"
 	"rdpshot/internal/model"
+	"rdpshot/internal/policy"
 	"rdpshot/internal/reporter"
 	"rdpshot/internal/scanner"
 	"rdpshot/internal/screenshot"
@@ -56,6 +58,7 @@ Commands:
   scan      Run a scan in the foreground.
   serve     Start the web UI and REST API.
   report    Generate a report from stored scan results.
+  policy    Evaluate hardening policy against a stored scan (CI gate).
   targets   Resolve target specifications and print the endpoints.
   version   Print the tool version and developer credits.
 
@@ -96,6 +99,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runServe(args[1:], stdout, stderr)
 	case "report":
 		return runReport(args[1:], stdout, stderr)
+	case "policy":
+		return runPolicy(args[1:], stdout, stderr)
 	case "targets":
 		return runTargets(args[1:], stdout, stderr)
 	case "version":
@@ -416,6 +421,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	passwordWordlist := fs.String("password-wordlist", def.PasswordWordlist, "default password wordlist for credential audits")
 	maxAuthFailures := fs.Int("max-auth-failures", def.MaxAuthFailures, "default maximum rejected logins per host")
 	maxTargets := fs.Int("max-targets", def.MaxTargets, "max expanded endpoints per scan (0 = unlimited)")
+	maxConcurrentScans := fs.Int("max-concurrent-scans", def.MaxConcurrentScans, "maximum scans executing at once (others stay pending)")
 
 	if err := fs.Parse(args); err != nil {
 		return flagErrorExit(err)
@@ -452,6 +458,8 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 			cfg.MaxAuthFailures = *maxAuthFailures
 		case "max-targets":
 			cfg.MaxTargets = *maxTargets
+		case "max-concurrent-scans":
+			cfg.MaxConcurrentScans = *maxConcurrentScans
 		}
 	})
 	if err := cfg.Validate(); err != nil {
@@ -481,13 +489,14 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	})
 
 	srv, err := server.New(server.Config{
-		Addr:             cfg.Addr,
-		Token:            cfg.Token,
-		OutputsDir:       cfg.OutputsDir,
-		ToolVersion:      version,
-		UserWordlist:     cfg.UserWordlist,
-		PasswordWordlist: cfg.PasswordWordlist,
-		MaxTargets:       cfg.MaxTargets,
+		Addr:               cfg.Addr,
+		Token:              cfg.Token,
+		OutputsDir:         cfg.OutputsDir,
+		ToolVersion:        version,
+		UserWordlist:       cfg.UserWordlist,
+		PasswordWordlist:   cfg.PasswordWordlist,
+		MaxTargets:         cfg.MaxTargets,
+		MaxConcurrentScans: cfg.MaxConcurrentScans,
 	}, server.Dependencies{
 		Store:  st,
 		Hub:    hub,
@@ -728,4 +737,101 @@ func runTargets(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "warning: no endpoints resolved from the given targets")
 	}
 	return exitOK
+}
+
+// runPolicy evaluates a stored scan against a hardening policy document.
+// Exit codes: 0 pass, 1 fail, 2 usage/error.
+func runPolicy(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Fprintln(stderr, `rdpshot policy check - evaluate hardening policy for CI
+
+Usage: rdpshot policy check --scan <id> [flags]
+
+Flags:
+  --scan     scan ID (required)
+  --db       SQLite database path
+  --policy   optional policy JSON file (default: store setting or built-in)
+
+Exit codes: 0 pass, 1 policy fail, 2 error`)
+		return exitOK
+	}
+	if args[0] != "check" {
+		fmt.Fprintf(stderr, "rdpshot policy: unknown subcommand %q (want check)\n", args[0])
+		return exitUsage
+	}
+	def := config.Default()
+	fs := newFlagSet("policy check", "policy check --scan <id> [flags]",
+		"Evaluate hardening policy against a stored scan.", stderr)
+	scanID := fs.String("scan", "", "scan ID to evaluate (required)")
+	dbPath := fs.String("db", def.DBPath, "path to the SQLite database")
+	policyPath := fs.String("policy", "", "optional policy JSON file")
+	if err := fs.Parse(args[1:]); err != nil {
+		return flagErrorExit(err)
+	}
+	if strings.TrimSpace(*scanID) == "" {
+		fmt.Fprintln(stderr, "rdpshot policy check: --scan is required")
+		return exitUsage
+	}
+	st, err := store.Open(*dbPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "rdpshot policy check: %v\n", err)
+		return exitUsage
+	}
+	defer st.Close()
+
+	var doc policy.Document
+	switch {
+	case strings.TrimSpace(*policyPath) != "":
+		raw, err := os.ReadFile(*policyPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "rdpshot policy check: read policy: %v\n", err)
+			return exitUsage
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			fmt.Fprintf(stderr, "rdpshot policy check: parse policy: %v\n", err)
+			return exitUsage
+		}
+	default:
+		raw, err := st.GetSettingJSON(store.PolicySettingsKey())
+		if err != nil {
+			fmt.Fprintf(stderr, "rdpshot policy check: %v\n", err)
+			return exitError
+		}
+		if len(raw) == 0 {
+			doc = policy.Default()
+		} else if err := json.Unmarshal(raw, &doc); err != nil {
+			fmt.Fprintf(stderr, "rdpshot policy check: decode stored policy: %v\n", err)
+			return exitError
+		}
+	}
+
+	if _, err := st.GetScan(*scanID); err != nil {
+		fmt.Fprintf(stderr, "rdpshot policy check: %v\n", err)
+		return exitError
+	}
+	hosts, err := st.ListHosts(*scanID)
+	if err != nil {
+		fmt.Fprintf(stderr, "rdpshot policy check: list hosts: %v\n", err)
+		return exitError
+	}
+	findings, err := st.ListFindings(*scanID)
+	if err != nil {
+		fmt.Fprintf(stderr, "rdpshot policy check: list findings: %v\n", err)
+		return exitError
+	}
+	result := policy.Evaluate(doc, hosts, findings)
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(map[string]any{
+		"scan_id": *scanID,
+		"policy":  doc,
+		"result":  result,
+	}); err != nil {
+		fmt.Fprintf(stderr, "rdpshot policy check: encode: %v\n", err)
+		return exitError
+	}
+	if result.Passed {
+		return exitOK
+	}
+	return exitError
 }

@@ -31,8 +31,10 @@ type htmlView struct {
 	Engagement   string
 	PreparedBy   string
 	FooterNote   string
+	LogoDataURI  template.URL
 	Scan         scanView
 	Cards        []cardView
+	TopFindings  []findingView
 	Severity     []severityBucket
 	Findings     []findingView
 	Hosts        []hostView
@@ -112,6 +114,7 @@ func buildHTMLView(d Data) htmlView {
 		Engagement:   orDash(firstNonEmpty(d.Branding.Engagement, d.Scan.Engagement)),
 		PreparedBy:   orDash(d.Branding.PreparedBy),
 		FooterNote:   orDash(d.Branding.FooterNote),
+		LogoDataURI:  template.URL(d.Branding.LogoDataURI),
 		Scan: scanView{
 			Name:  orDash(d.Scan.Name),
 			ID:    orDash(d.Scan.ID),
@@ -121,7 +124,7 @@ func buildHTMLView(d Data) htmlView {
 		Severity: severityBuckets(d),
 	}
 	for _, f := range sortedFindings(d.Findings) {
-		view.Findings = append(view.Findings, findingView{
+		row := findingView{
 			Severity:      string(f.Severity),
 			SeverityClass: severityClass(f.Severity),
 			CheckID:       orDash(f.CheckID),
@@ -132,7 +135,11 @@ func buildHTMLView(d Data) htmlView {
 			HostPort:      endpointText(f.Address, f.Port),
 			Evidence:      orDash(singleLine(f.Evidence)),
 			Remediation:   orDash(singleLine(f.Remediation)),
-		})
+		}
+		view.Findings = append(view.Findings, row)
+		if len(view.TopFindings) < 3 && (f.Status == model.FindingVulnerable || f.Status == model.FindingPotential) {
+			view.TopFindings = append(view.TopFindings, row)
+		}
 	}
 	for _, h := range d.Hosts {
 		view.Hosts = append(view.Hosts, hostRow(h))
@@ -164,6 +171,7 @@ func buildHTMLView(d Data) htmlView {
 // summaryCards builds the executive summary counters.
 func summaryCards(d Data) []cardView {
 	cards := []cardView{
+		{Label: "Hardening Score", Value: int64(d.HardeningScore)},
 		{Label: "Hosts Total", Value: d.Summary.HostsTotal},
 		{Label: "Hosts Open", Value: d.Summary.HostsOpen},
 	}

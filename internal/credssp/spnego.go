@@ -9,9 +9,16 @@ import (
 // (MS-SPNG appendix; RFC 4178 MechType).
 var ntlmMechOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 2, 2, 10}
 
+// kerberosMechOID is the Kerberos V5 mechanism 1.2.840.113554.1.2.2.
+var kerberosMechOID = asn1.ObjectIdentifier{1, 2, 840, 113554, 1, 2, 2}
+
 // spnegoOID is the GSS-API security mechanism OID 1.3.6.1.5.5.2 that frames
 // SPNEGO tokens produced by SSPI (RFC 2743 wrapper).
 var spnegoOID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 2}
+
+// OfferKerberos, when true, advertises Kerberos ahead of NTLM in NegTokenInit.
+// The initial mechToken remains NTLM until a full AP-REQ builder is available.
+var OfferKerberos bool
 
 // WrapNegTokenInit wraps a raw NTLM token in a SPNEGO NegTokenInit
 // (RFC 4178) advertising the NTLM mechanism:
@@ -20,7 +27,11 @@ var spnegoOID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 2}
 //	    mechTypes [0] MechTypeList,
 //	    mechToken [2] OCTET STRING }
 func WrapNegTokenInit(ntlmToken []byte) ([]byte, error) {
-	mechTypes, err := asn1.Marshal([]asn1.ObjectIdentifier{ntlmMechOID})
+	mechs := []asn1.ObjectIdentifier{ntlmMechOID}
+	if OfferKerberos {
+		mechs = []asn1.ObjectIdentifier{kerberosMechOID, ntlmMechOID}
+	}
+	mechTypes, err := asn1.Marshal(mechs)
 	if err != nil {
 		return nil, fmt.Errorf("credssp: marshal mechTypes: %w", err)
 	}

@@ -25,6 +25,7 @@ type Payload struct {
 	Critical   int64          `json:"critical"`
 	High       int64          `json:"high"`
 	Engagement string         `json:"engagement,omitempty"`
+	Detail     string         `json:"detail,omitempty"`
 }
 
 // Webhook posts a JSON notification with a bounded timeout.

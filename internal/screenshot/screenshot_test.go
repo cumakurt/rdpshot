@@ -174,6 +174,9 @@ func TestAutoGrabberFallsBack(t *testing.T) {
 	auto.Primary.(*XFreeRDPGrabber).lookPath = func(string) (string, error) {
 		return "", errors.New("missing")
 	}
+	// Force the Go framebuffer path to fail without dialing the network so the
+	// evidence-card fallback is what this unit test exercises.
+	auto.Secondary = stubGrabber{err: errors.New("framebuffer unavailable in test")}
 	shot, err := auto.Grab(context.Background(),
 		model.Endpoint{Address: "10.0.0.9", Port: 3389},
 		model.Credential{Username: "u", Secret: "p"})
@@ -183,4 +186,11 @@ func TestAutoGrabberFallsBack(t *testing.T) {
 	if filepath.Dir(shot.FilePath) != dir {
 		t.Fatalf("path = %s", shot.FilePath)
 	}
+}
+
+type stubGrabber struct{ err error }
+
+func (s stubGrabber) Available() error { return nil }
+func (s stubGrabber) Grab(context.Context, model.Endpoint, model.Credential) (model.Screenshot, error) {
+	return model.Screenshot{}, s.err
 }

@@ -897,7 +897,7 @@
         var id = button.getAttribute('data-delete-scan');
         postScanAction(button, '', {
           title: 'Delete scan',
-          message: 'Delete scan ' + id + ' and its stored artifacts? This cannot be undone.',
+          message: 'Delete scan ' + id + ' and its stored artifacts? Active runs are stopped first. This cannot be undone.',
           confirmLabel: 'Delete',
           cancelLabel: 'Keep scan',
           danger: true,
@@ -1686,6 +1686,42 @@
         saveFindingTriage(btn.getAttribute('data-triage-save'));
       });
     });
+    var selectAll = document.getElementById('findings-select-all');
+    if (selectAll) {
+      selectAll.addEventListener('change', function () {
+        Array.prototype.forEach.call(document.querySelectorAll('[data-finding-select]'), function (cb) {
+          cb.checked = selectAll.checked;
+        });
+      });
+    }
+    var bulkBtn = document.getElementById('bulk-triage-apply');
+    if (bulkBtn) {
+      bulkBtn.addEventListener('click', function () {
+        var ids = [];
+        Array.prototype.forEach.call(document.querySelectorAll('[data-finding-select]:checked'), function (cb) {
+          var id = Number(cb.getAttribute('data-finding-select'));
+          if (id) ids.push(id);
+        });
+        if (!ids.length) {
+          portalNotify('Select at least one finding', 'error');
+          return;
+        }
+        var statusEl = document.getElementById('bulk-triage-status');
+        var status = statusEl ? statusEl.value : 'open';
+        fetch('/api/v1/findings/bulk-triage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: ids, status: status, note: '' })
+        })
+          .then(function (resp) {
+            if (!resp.ok) throw new Error('bulk triage failed');
+            location.reload();
+          })
+          .catch(function (err) {
+            portalNotify(err.message, 'error');
+          });
+      });
+    }
   }
 
   function initTrendChart() {
@@ -1766,6 +1802,9 @@
         form.engagement.value = b.engagement || '';
         form.prepared_by.value = b.prepared_by || '';
         form.footer_note.value = b.footer_note || '';
+        if (form.logo_data_uri) {
+          form.logo_data_uri.value = b.logo_data_uri || '';
+        }
       })
       .catch(function () { /* optional */ });
 
@@ -1778,7 +1817,8 @@
           organization: form.organization.value,
           engagement: form.engagement.value,
           prepared_by: form.prepared_by.value,
-          footer_note: form.footer_note.value
+          footer_note: form.footer_note.value,
+          logo_data_uri: form.logo_data_uri ? form.logo_data_uri.value : ''
         })
       })
         .then(function (resp) {
@@ -1788,6 +1828,104 @@
           portalNotify('Branding saved', 'ok');
         })
         .catch(function (err) {
+          portalNotify(err.message, 'error');
+        });
+    });
+  }
+
+  function initAlertsForm() {
+    var form = document.getElementById('alerts-form');
+    if (!form) {
+      return;
+    }
+    var status = document.getElementById('alerts-status');
+    var enabled = document.getElementById('alert-enabled');
+    var critical = document.getElementById('alert-critical');
+    var nla = document.getElementById('alert-nla');
+    fetch('/api/v1/settings/alerts')
+      .then(function (resp) { return resp.json(); })
+      .then(function (rules) {
+        if (!rules) return;
+        form.webhook_url.value = rules.webhook_url || '';
+        form.on_cred_reuse_min.value = rules.on_cred_reuse_min || 0;
+        if (enabled) enabled.checked = !!rules.enabled;
+        if (critical) critical.checked = !!rules.on_critical;
+        if (nla) nla.checked = !!rules.on_nla_regressed;
+      })
+      .catch(function () { /* optional */ });
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      fetch('/api/v1/settings/alerts', {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          webhook_url: form.webhook_url.value,
+          enabled: enabled ? enabled.checked : false,
+          on_critical: critical ? critical.checked : false,
+          on_nla_regressed: nla ? nla.checked : false,
+          on_cred_reuse_min: Number(form.on_cred_reuse_min.value || 0)
+        })
+      })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error('unable to save alerts');
+          if (status) status.textContent = 'Alert rules saved.';
+          portalNotify('Alert rules saved', 'ok');
+        })
+        .catch(function (err) {
+          if (status) status.textContent = err.message;
+          portalNotify(err.message, 'error');
+        });
+    });
+  }
+
+  function initSIEMForm() {
+    var form = document.getElementById('siem-form');
+    if (!form) {
+      return;
+    }
+    var status = document.getElementById('siem-status');
+    var enabled = document.getElementById('siem-enabled');
+    var format = document.getElementById('siem-format');
+    fetch('/api/v1/settings/siem')
+      .then(function (resp) { return resp.json(); })
+      .then(function (cfg) {
+        if (!cfg) {
+          return;
+        }
+        form.webhook_url.value = cfg.webhook_url || '';
+        if (format) {
+          format.value = cfg.format || 'json';
+        }
+        if (enabled) {
+          enabled.checked = !!cfg.enabled;
+        }
+      })
+      .catch(function () { /* optional */ });
+
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      fetch('/api/v1/settings/siem', {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          webhook_url: form.webhook_url.value,
+          format: format ? format.value : 'json',
+          enabled: enabled ? enabled.checked : false
+        })
+      })
+        .then(function (resp) {
+          if (!resp.ok) {
+            throw new Error('unable to save SIEM settings');
+          }
+          if (status) {
+            status.textContent = 'SIEM settings saved.';
+          }
+          portalNotify('SIEM settings saved', 'ok');
+        })
+        .catch(function (err) {
+          if (status) {
+            status.textContent = err.message;
+          }
           portalNotify(err.message, 'error');
         });
     });
@@ -1976,6 +2114,8 @@
     initRiskChart();
     initTrendChart();
     initBrandingForm();
+    initAlertsForm();
+    initSIEMForm();
     initAdminPanels();
     initGallery();
   });

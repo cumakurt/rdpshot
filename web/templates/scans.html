@@ -64,13 +64,12 @@
                   <td>{{ .CreatedAt.Format "2006-01-02 15:04:05" }}</td>
                   <td class="text-right whitespace-nowrap">
                     <a href="/scans/{{ .ID }}" class="btn btn-ghost btn-sm">Open</a>
-                    {{ if or (eq .Status "completed") (eq .Status "failed") (eq .Status "cancelled") }}
-                    <button type="button" data-delete-scan="{{ .ID }}" class="btn btn-ghost btn-sm">Delete</button>
-                    {{ else if eq .Status "running" }}
+                    {{ if eq .Status "running" }}
                     <button type="button" data-pause-scan="{{ .ID }}" class="btn btn-ghost btn-sm">Pause</button>
                     {{ else if eq .Status "paused" }}
                     <button type="button" data-resume-scan="{{ .ID }}" class="btn btn-ghost btn-sm">Resume</button>
                     {{ end }}
+                    <button type="button" data-delete-scan="{{ .ID }}" class="btn btn-ghost btn-sm">Delete</button>
                   </td>
                 </tr>
                 {{ end }}

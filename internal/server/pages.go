@@ -10,6 +10,7 @@ import (
 
 	"rdpshot/internal/about"
 	"rdpshot/internal/model"
+	"rdpshot/internal/score"
 	"rdpshot/internal/store"
 	"rdpshot/web"
 )
@@ -50,7 +51,15 @@ type ScanDetailData struct {
 	Creds            []model.Credential
 	Screens          []model.Screenshot
 	Summary          model.Summary
+	Score            score.ScanScore
 	Wordlists        WordlistPickerData
+}
+
+// EstateData renders the attack-surface risk map page.
+type EstateData struct {
+	Title, ActiveNav string
+	Engagement       string
+	Scans            []model.Scan
 }
 
 // GalleryData renders the screenshot gallery page.
@@ -200,12 +209,40 @@ func (s *Server) handleScanDetail(w http.ResponseWriter, r *http.Request) {
 		Title:     "Scan " + scan.Name,
 		ActiveNav: "scans",
 		Scan:      scan,
-		Hosts:     hosts,
+		Hosts:     openHostsOnly(hosts),
 		Findings:  findings,
 		Creds:     maskCredentials(creds),
 		Screens:   screenshotViews(screens),
 		Summary:   summary,
+		Score:     score.EvaluateScan(scan.ID, hosts, findings),
 		Wordlists: s.wordlistPicker("brute"),
+	})
+}
+
+// openHostsOnly keeps endpoints where RDP was actually discovered.
+func openHostsOnly(hosts []model.Host) []model.Host {
+	out := make([]model.Host, 0, len(hosts))
+	for _, h := range hosts {
+		if h.State == "open" {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// handleEstatePage renders the estate risk map.
+func (s *Server) handleEstatePage(w http.ResponseWriter, r *http.Request) {
+	engagement := strings.TrimSpace(r.URL.Query().Get("engagement"))
+	scans, err := s.deps.Store.ListScansFiltered(recentScansLimit, engagement, "")
+	if err != nil {
+		s.internalError(w, r, "load scans for estate", err)
+		return
+	}
+	s.renderPage(w, "estate", EstateData{
+		Title:      "Estate",
+		ActiveNav:  "estate",
+		Engagement: engagement,
+		Scans:      scans,
 	})
 }
 

@@ -57,6 +57,32 @@
       </section>
 
       <section class="card mb-6">
+        <div class="card-head"><h2 class="card-title">SIEM streaming</h2></div>
+        <div class="card-body">
+          <form id="siem-form" class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div class="field sm:col-span-2">
+              <label class="label" for="siem-url">Webhook URL</label>
+              <input id="siem-url" name="webhook_url" type="url" class="input" placeholder="https://siem.example/hooks/rdpshot">
+            </div>
+            <div class="field">
+              <label class="label" for="siem-format">Format</label>
+              <select id="siem-format" name="format" class="input">
+                <option value="json">JSON</option>
+                <option value="cef">CEF</option>
+              </select>
+            </div>
+            <label class="check-row sm:col-span-2">
+              <input id="siem-enabled" type="checkbox" class="checkbox"> Enable SIEM streaming on scan completion
+            </label>
+            <div class="field flex items-end">
+              <button type="submit" class="btn btn-ghost btn-block">Save SIEM</button>
+            </div>
+          </form>
+          <p id="siem-status" class="card-hint mt-2"></p>
+        </div>
+      </section>
+
+      <section class="card mb-6">
         <div class="card-head"><h2 class="card-title">Report branding</h2></div>
         <div class="card-body">
           <form id="branding-form" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -64,8 +90,30 @@
             <div class="field"><label class="label" for="brand-engagement">Default engagement</label><input id="brand-engagement" name="engagement" class="input"></div>
             <div class="field"><label class="label" for="brand-prepared">Prepared by</label><input id="brand-prepared" name="prepared_by" class="input"></div>
             <div class="field"><label class="label" for="brand-note">Footer note</label><input id="brand-note" name="footer_note" class="input"></div>
+            <div class="field sm:col-span-2"><label class="label" for="brand-logo">Logo data URI</label><input id="brand-logo" name="logo_data_uri" class="input" placeholder="data:image/png;base64,…"></div>
             <div class="sm:col-span-2"><button type="submit" class="btn btn-ghost">Save branding</button></div>
           </form>
+        </div>
+      </section>
+
+      <section class="card mb-6">
+        <div class="card-head"><h2 class="card-title">Alert rules</h2></div>
+        <div class="card-body">
+          <form id="alerts-form" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div class="field sm:col-span-2">
+              <label class="label" for="alert-url">Webhook URL</label>
+              <input id="alert-url" name="webhook_url" type="url" class="input" placeholder="https://hooks.example/rdpshot">
+            </div>
+            <label class="check-row"><input id="alert-enabled" type="checkbox" class="checkbox"> Enable alerts</label>
+            <label class="check-row"><input id="alert-critical" type="checkbox" class="checkbox"> On critical findings</label>
+            <label class="check-row"><input id="alert-nla" type="checkbox" class="checkbox"> On NLA regression</label>
+            <div class="field">
+              <label class="label" for="alert-reuse">Cred reuse minimum hosts</label>
+              <input id="alert-reuse" name="on_cred_reuse_min" type="number" min="0" value="2" class="input">
+            </div>
+            <div class="sm:col-span-2"><button type="submit" class="btn btn-ghost">Save alerts</button></div>
+          </form>
+          <p id="alerts-status" class="card-hint mt-2"></p>
         </div>
       </section>
 
@@ -86,11 +134,32 @@
           <p class="stat-meta">TLS 1.0/1.1 or RDP security</p>
         </article>
         <article class="stat-card">
-          <p class="stat-label">Critical Findings</p>
-          <p class="stat-value tone-rose" data-counter="critical" data-value="{{ .Analytics.CriticalFindings }}">{{ .Analytics.CriticalFindings }}</p>
-          <p class="stat-meta">Avg CVSS {{ printf "%.1f" .Analytics.AvgCVSS }}</p>
+          <p class="stat-label">Certs expiring ≤30d</p>
+          <p class="stat-value tone-amber" data-counter="expiring" data-value="{{ .Analytics.CertsExpiring30d }}">{{ .Analytics.CertsExpiring30d }}</p>
+          <p class="stat-meta">Critical findings {{ .Analytics.CriticalFindings }} · Avg CVSS {{ printf "%.1f" .Analytics.AvgCVSS }}</p>
         </article>
       </section>
+
+      {{ if .Analytics.ExpiringCerts }}
+      <section class="card mb-6">
+        <div class="card-head"><h2 class="card-title">Certificates expiring within 30 days</h2></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Host</th><th>Port</th><th>TLS</th><th>Self-signed</th></tr></thead>
+            <tbody>
+              {{ range .Analytics.ExpiringCerts }}
+              <tr>
+                <td class="cell-mono">{{ .Address }}</td>
+                <td class="cell-mono">{{ .Port }}</td>
+                <td class="cell-mono">{{ .TLSVersion }}</td>
+                <td>{{ if .SelfSigned }}yes{{ else }}no{{ end }}</td>
+              </tr>
+              {{ end }}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {{ end }}
 
       <section class="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div class="card">

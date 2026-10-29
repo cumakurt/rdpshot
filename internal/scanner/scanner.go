@@ -12,8 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"rdpshot/internal/auth"
 	"rdpshot/internal/brute"
+	"rdpshot/internal/discovery"
 	"rdpshot/internal/events"
+	"rdpshot/internal/kerberos"
 	"rdpshot/internal/model"
 	"rdpshot/internal/rdp"
 	"rdpshot/internal/screenshot"
@@ -89,8 +92,17 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 		if err != nil {
 			logger.Warn("credential audit disabled", "reason", err.Error())
 			e.log(scan.ID, "warn", "credential audit disabled: "+err.Error())
+		} else if reuse := e.loadReuseCredentials(scan); len(reuse) > 0 {
+			candidates = mergeReuseCredentials(reuse, candidates)
+			e.log(scan.ID, "info", fmt.Sprintf("smart credential audit: prepended %d previously verified credential(s)", len(reuse)))
 		}
 	}
+	if scan.Options.BaseScanID != "" {
+		endpoints = e.applyDeltaFilter(scan, endpoints, logger)
+		scan.Progress.Total = int64(len(endpoints))
+		e.persistScan(*scan)
+	}
+	e.prioritizeEndpoints(scan, endpoints)
 	screensEnabled := scan.Options.EnableScreens && scan.Options.Acknowledged && e.deps.Grabber != nil
 	if screensEnabled {
 		if err := e.deps.Grabber.Available(); err != nil {
@@ -108,6 +120,11 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if scan.Options.MaxRuntimeSec > 0 {
+		var runtimeCancel context.CancelFunc
+		ctx, runtimeCancel = context.WithTimeout(ctx, time.Duration(scan.Options.MaxRuntimeSec)*time.Second)
+		defer runtimeCancel()
+	}
 
 	jobs := make(chan model.Endpoint)
 	workers := scan.Options.Concurrency
@@ -205,6 +222,36 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 	case err == nil:
 		host.State = "open"
 		svc := result.Service
+		if scan.Options.EnableDiscovery {
+			disc := discovery.Probe(ctx, ep.Address)
+			svc.RDWeb = disc.RDWeb
+			svc.RDWebURL = disc.RDWebURL
+			svc.RDGateway = disc.RDGateway
+			svc.RDGatewayAuth = disc.RDGatewayAuth
+			svc.UDP3389 = disc.UDP3389
+			if svc.Evidence == nil {
+				svc.Evidence = map[string]string{}
+			}
+			if disc.RDWebEvidence != "" {
+				svc.Evidence["rd_web"] = disc.RDWebEvidence
+			}
+			if disc.RDGatewayEvidence != "" {
+				svc.Evidence["rd_gateway"] = disc.RDGatewayEvidence
+			}
+			if disc.RDGatewayAuth != "" {
+				svc.Evidence["rd_gateway_auth"] = disc.RDGatewayAuth
+			}
+			if disc.UDPEvidence != "" {
+				svc.Evidence["udp_3389"] = disc.UDPEvidence
+			}
+		}
+		if svc.NLARequired && kerberos.Available() {
+			svc.KerberosOffered = true
+			if svc.Evidence == nil {
+				svc.Evidence = map[string]string{}
+			}
+			svc.Evidence["kerberos"] = "client offered Kerberos mech (ccache/keytab present)"
+		}
 		host.Service = &svc
 		atomic.AddInt64(&progress.Open, 1)
 	case errors.Is(err, rdp.ErrTimeout):
@@ -230,7 +277,9 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 	}
 
 	if scan.Options.EnableVuln {
-		findings := vuln.Evaluate(ep, vuln.Input{Service: host.Service, BlueKeep: result.BlueKeep})
+		findings := vuln.Evaluate(ep, vuln.Input{
+			Service: host.Service, BlueKeep: result.BlueKeep, TargetHost: ep.Address,
+		})
 		for _, finding := range findings {
 			finding.ScanID = scan.ID
 			finding.HostID = hostID
@@ -275,6 +324,9 @@ func (e *Engine) auditCredentials(ctx context.Context, scan *model.Scan, ep mode
 	res, err := engine.Run(ctx, ep, hostID, scan.ID, candidates)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		logger.Warn("credential audit stopped", "reason", err.Error())
+		if errors.Is(err, auth.ErrSmartCardRequired) {
+			e.recordSmartCardFinding(scan, ep, hostID, progress)
+		}
 	}
 	if res.LockedOut {
 		e.log(scan.ID, "warn", fmt.Sprintf("account lockout reported by %s; audit stopped for this host", ep.Key()))
@@ -293,6 +345,32 @@ func (e *Engine) auditCredentials(ctx context.Context, scan *model.Scan, ep mode
 		return res.Credentials[0], true
 	}
 	return model.Credential{}, false
+}
+
+func (e *Engine) recordSmartCardFinding(scan *model.Scan, ep model.Endpoint, hostID int64, progress *model.Progress) {
+	if host, err := e.deps.Store.GetHost(hostID); err == nil && host.Service != nil {
+		host.Service.SmartCardRequired = true
+		if host.Service.Evidence == nil {
+			host.Service.Evidence = map[string]string{}
+		}
+		host.Service.Evidence["smart_card"] = "NTSTATUS indicated smart-card logon"
+		_, _ = e.deps.Store.UpsertHost(host)
+	}
+	finding := model.Finding{
+		ScanID: scan.ID, HostID: hostID, Address: ep.Address, Port: ep.Port,
+		CheckID: "nla-smartcard-required", Title: "Smart-card logon indicated by NLA",
+		Severity: model.SeverityInfo, Status: model.FindingVulnerable,
+		Evidence: "CredSSP/NLA reported smart-card logon requirement",
+		Remediation: "Document smart-card requirements in the engagement ROE; password sprays will not succeed against these accounts.",
+		DetectedAt: time.Now().UTC(),
+	}
+	id, err := e.deps.Store.InsertFinding(finding)
+	if err != nil {
+		return
+	}
+	finding.ID = id
+	atomic.AddInt64(&progress.Findings, 1)
+	e.publish(model.Event{Type: model.EventFinding, ScanID: scan.ID, At: finding.DetectedAt, Payload: finding})
 }
 
 // captureScreenshot stores a session image for a verified credential.
@@ -327,6 +405,82 @@ func (e *Engine) loadCandidates(opts model.ScanOptions) ([]model.Credential, err
 		return nil, err
 	}
 	return brute.BuildCandidates(users, passwords)
+}
+
+func (e *Engine) loadReuseCredentials(scan *model.Scan) []model.Credential {
+	if e.deps.Store == nil {
+		return nil
+	}
+	// Prefer credentials from the base scan; otherwise any prior scan sharing
+	// the same engagement label.
+	var out []model.Credential
+	if scan.Options.BaseScanID != "" {
+		creds, err := e.deps.Store.ListCredentials(scan.Options.BaseScanID)
+		if err == nil {
+			out = append(out, creds...)
+		}
+	}
+	if scan.Engagement == "" {
+		return out
+	}
+	scans, err := e.deps.Store.ListScansFiltered(50, scan.Engagement, "")
+	if err != nil {
+		return out
+	}
+	seenScan := map[string]bool{scan.ID: true, scan.Options.BaseScanID: true}
+	for _, sc := range scans {
+		if seenScan[sc.ID] {
+			continue
+		}
+		seenScan[sc.ID] = true
+		creds, err := e.deps.Store.ListCredentials(sc.ID)
+		if err != nil {
+			continue
+		}
+		out = append(out, creds...)
+		if len(out) >= 64 {
+			break
+		}
+	}
+	return out
+}
+
+func (e *Engine) applyDeltaFilter(scan *model.Scan, endpoints []model.Endpoint, logger *slog.Logger) []model.Endpoint {
+	baseHosts, err := e.deps.Store.ListHosts(scan.Options.BaseScanID)
+	if err != nil {
+		logger.Warn("delta retest: base hosts unavailable", "base_scan_id", scan.Options.BaseScanID, "error", err.Error())
+		return endpoints
+	}
+	baseFindings, err := e.deps.Store.ListFindings(scan.Options.BaseScanID)
+	if err != nil {
+		logger.Warn("delta retest: base findings unavailable", "base_scan_id", scan.Options.BaseScanID, "error", err.Error())
+		return endpoints
+	}
+	filtered := FilterDeltaEndpoints(endpoints, baseHosts, baseFindings)
+	logger.Info("delta retest filtered endpoints",
+		"base_scan_id", scan.Options.BaseScanID,
+		"before", len(endpoints), "after", len(filtered))
+	e.log(scan.ID, "info", fmt.Sprintf("delta retest: %d of %d endpoints selected", len(filtered), len(endpoints)))
+	return filtered
+}
+
+func (e *Engine) prioritizeEndpoints(scan *model.Scan, endpoints []model.Endpoint) {
+	if e.deps.Store == nil || len(endpoints) == 0 {
+		return
+	}
+	baseID := scan.Options.BaseScanID
+	if baseID == "" {
+		return
+	}
+	hosts, err := e.deps.Store.ListHosts(baseID)
+	if err != nil {
+		return
+	}
+	findings, err := e.deps.Store.ListFindings(baseID)
+	if err != nil {
+		return
+	}
+	PrioritizeEndpoints(endpoints, hosts, findings)
 }
 
 func (e *Engine) persistScan(scan model.Scan) {

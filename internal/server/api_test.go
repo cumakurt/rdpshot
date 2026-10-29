@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -611,6 +612,38 @@ func TestRenameAndDeleteScan(t *testing.T) {
 		t.Fatalf("get deleted status = %d, want 404", getResp.StatusCode)
 	}
 	getResp.Body.Close()
+}
+
+func TestDeleteActiveScan(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	seededScan(t, env.store, "scan-delete-active0001", model.ScanPaused)
+
+	cancelled := false
+	env.server.runsMu.Lock()
+	env.server.runs["scan-delete-active0001"] = &scanRun{
+		cancel:  func() { cancelled = true },
+		control: scanner.NewRunControl(nil),
+	}
+	env.server.runsMu.Unlock()
+
+	delReq, err := http.NewRequest(http.MethodDelete, env.http.URL+"/api/v1/scans/scan-delete-active0001", nil)
+	if err != nil {
+		t.Fatalf("new delete: %v", err)
+	}
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if delResp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d, body: %s", delResp.StatusCode, readBody(t, delResp))
+	}
+	delResp.Body.Close()
+	if !cancelled {
+		t.Fatal("expected active run to be cancelled before delete")
+	}
+	if _, err := env.store.GetScan("scan-delete-active0001"); !errors.Is(err, store.ErrScanNotFound) {
+		t.Fatalf("get deleted: %v", err)
+	}
 }
 
 func TestPauseResumeScan(t *testing.T) {

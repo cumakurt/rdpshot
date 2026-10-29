@@ -4,6 +4,7 @@ package vuln
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ type Input struct {
 	// BlueKeep is the outcome of the safe CVE-2019-0708 detection probe and
 	// may be nil when the probe was not requested or not possible.
 	BlueKeep *rdp.BlueKeepResult
+	// TargetHost is the address/hostname used for the scan (for SAN matching).
+	TargetHost string
 }
 
 type check struct {
@@ -240,7 +243,123 @@ func catalog() []check {
 				return "", ""
 			},
 		},
+		{
+			id:          "cert-hostname-mismatch",
+			title:       "RDP certificate does not match the scanned hostname",
+			severity:    model.SeverityMedium,
+			cvss:        5.3,
+			remediation: "Issue a certificate whose CN/SAN matches the hostname clients use to connect, or connect only by the certified name.",
+			evaluate:    evaluateCertHostname,
+		},
+		{
+			id:          "rd-web-exposed",
+			title:       "RD Web Access portal appears exposed",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Restrict RD Web to VPN or trusted networks and enforce MFA.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.RDWeb {
+					return "", ""
+				}
+				return model.FindingVulnerable, "RD Web markers observed at " + in.Service.RDWebURL
+			},
+		},
+		{
+			id:          "rd-gateway-exposed",
+			title:       "RD Gateway endpoint appears exposed",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Publish RD Gateway only through controlled ingress and require strong authentication.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.RDGateway {
+					return "", ""
+				}
+				return model.FindingVulnerable, "RD Gateway HTTP/RPC path responded"
+			},
+		},
+		{
+			id:          "udp-3389-open",
+			title:       "UDP/3389 appears reachable",
+			severity:    model.SeverityLow,
+			cvss:        3.1,
+			remediation: "Disable UDP transport for RDP unless required, or restrict it to trusted networks.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.UDP3389 {
+					return "", ""
+				}
+				return model.FindingPotential, "UDP/3389 probe indicated a reachable service"
+			},
+		},
+		{
+			id:          "nla-kerberos-offered",
+			title:       "Kerberos mechanism offered during NLA",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Prefer Kerberos over NTLM for NLA when domain-joined; ensure ticket caches are rotated and constrained delegation is reviewed.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.KerberosOffered {
+					return "", ""
+				}
+				return model.FindingVulnerable, "CredSSP SPNEGO advertised Kerberos (ccache/keytab available on scanner)"
+			},
+		},
+		{
+			id:          "nla-smartcard-required",
+			title:       "Smart-card logon indicated by NLA",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Document smart-card requirements in the engagement ROE; password sprays will not succeed against these accounts.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.SmartCardRequired {
+					return "", ""
+				}
+				return model.FindingVulnerable, "CredSSP/NLA reported smart-card logon requirement"
+			},
+		},
 	}
+}
+
+func evaluateCertHostname(in Input) (model.FindingStatus, string) {
+	if in.Service == nil || in.Service.Certificate == nil || in.TargetHost == "" {
+		return "", ""
+	}
+	host := strings.TrimSpace(in.TargetHost)
+	if netIP := parseIPLike(host); netIP {
+		// IP targets rarely match DNS SANs; treat as informational potential.
+		if len(in.Service.Certificate.DNSNames) == 0 {
+			return model.FindingPotential, "scanned by IP and certificate has no DNS SANs"
+		}
+		return "", ""
+	}
+	host = strings.ToLower(host)
+	subject := strings.ToLower(in.Service.Certificate.Subject)
+	for _, san := range in.Service.Certificate.DNSNames {
+		if strings.EqualFold(san, host) || matchWildcard(san, host) {
+			return model.FindingNotVulnerable, "certificate SAN matches " + host
+		}
+	}
+	if strings.Contains(subject, "cn="+host) {
+		return model.FindingPotential, "CN appears to match but SAN verification failed for " + host
+	}
+	return model.FindingVulnerable, fmt.Sprintf("certificate SANs %v do not include scanned host %q", in.Service.Certificate.DNSNames, host)
+}
+
+func parseIPLike(host string) bool {
+	return net.ParseIP(host) != nil
+}
+
+func matchWildcard(pattern, host string) bool {
+	pattern = strings.ToLower(pattern)
+	host = strings.ToLower(host)
+	if !strings.HasPrefix(pattern, "*.") {
+		return false
+	}
+	suffix := pattern[1:] // .example.com
+	if !strings.HasSuffix(host, suffix) {
+		return false
+	}
+	prefix := host[:len(host)-len(suffix)]
+	return prefix != "" && !strings.Contains(prefix, ".")
 }
 
 func evaluateBlueKeep(in Input) (model.FindingStatus, string) {

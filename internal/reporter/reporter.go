@@ -17,16 +17,18 @@ const toolName = about.Product
 
 // Data is everything a report needs; it is fully self-contained.
 type Data struct {
-	Scan        model.Scan
-	Summary     model.Summary
-	Hosts       []model.Host
-	Findings    []model.Finding
-	Credentials []model.Credential // already masked by the caller; never print raw secrets
-	Screens     []model.Screenshot
-	CVEStats    []model.CVEStat
-	GeneratedAt time.Time
-	ToolVersion string
-	Branding    model.ReportBranding
+	Scan           model.Scan
+	Summary        model.Summary
+	Hosts          []model.Host
+	Findings       []model.Finding
+	Credentials    []model.Credential // already masked by the caller; never print raw secrets
+	Screens        []model.Screenshot
+	CVEStats       []model.CVEStat
+	GeneratedAt    time.Time
+	ToolVersion    string
+	Branding       model.ReportBranding
+	HardeningScore int
+	HardeningGrade string
 }
 
 // sortedFindings returns a copy of the findings ordered by severity rank

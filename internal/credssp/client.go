@@ -15,17 +15,21 @@ import (
 	"net"
 	"time"
 
+	"rdpshot/internal/kerberos"
 	"rdpshot/internal/ntlm"
 )
 
 // NTSTATUS codes reported through TSRequest.errorCode (MS-ERREF 2.3).
 const (
-	StatusWrongPassword       uint32 = 0xC000006A
-	StatusNoSuchUser          uint32 = 0xC0000064
-	StatusAccountLockedOut    uint32 = 0xC0000234
-	StatusAccountDisabled     uint32 = 0xC0000072
-	StatusLogonTypeNotGranted uint32 = 0xC000015B
-	StatusNotSupported        uint32 = 0xC00000BB
+	StatusWrongPassword            uint32 = 0xC000006A
+	StatusNoSuchUser               uint32 = 0xC0000064
+	StatusAccountLockedOut         uint32 = 0xC0000234
+	StatusAccountDisabled          uint32 = 0xC0000072
+	StatusLogonTypeNotGranted      uint32 = 0xC000015B
+	StatusNotSupported             uint32 = 0xC00000BB
+	StatusSmartcardLogonRequired   uint32 = 0xC000015C
+	StatusSmartcardWrongPIN        uint32 = 0xC0000388
+	StatusSmartcardCardNotPresent  uint32 = 0xC0000382
 )
 
 // NTStatusError reports that the peer terminated the CredSSP exchange with
@@ -66,33 +70,43 @@ type Client struct {
 	Domain string
 }
 
-// Handshake runs the CredSSP client exchange over conn, which must already
-// carry an established TLS session (MS-CSSP 3.1.5 message flow):
-//
-//  1. TSRequest with the SPNEGO-wrapped NTLM NEGOTIATE message.
-//  2. Server TSRequest with the NTLM CHALLENGE (errorCode checked).
-//  3. TSRequest with the SPNEGO-wrapped NTLM AUTHENTICATE message and the
-//     sealed pubKeyAuth binding.
-//  4. Server TSRequest whose pubKeyAuth proves possession of the TLS keying
-//     material (errorCode checked).
-//
-// The final MS-CSSP step (TSRequest with sealed TSCredentials) is a
-// credential-delegation step and is intentionally not performed: this client
-// only verifies the credential, it does not open a remote session.
-//
-// ctx cancellation is honored between protocol steps; the caller controls
-// per-I/O deadlines on conn.
+// Session is a CredSSP-authenticated TLS connection with the NTLM session
+// security context retained for optional post-handshake use.
+type Session struct {
+	Conn     *tls.Conn
+	Security *ntlm.SessionSecurity
+	Version  int
+}
+
+// Handshake runs the CredSSP client exchange without credential delegation.
+// It verifies the account but does not send TSCredentials, so no remote
+// desktop session is opened. See HandshakeSession for the full flow.
 func (c *Client) Handshake(ctx context.Context, conn net.Conn, user, password, domain string) error {
+	_, err := c.handshake(ctx, conn, user, password, domain, false)
+	return err
+}
+
+// HandshakeSession runs CredSSP including the final TSCredentials
+// (authInfo) delegation step required before MCS/RDP graphics can start.
+// On success the returned Session owns the still-open TLS connection; the
+// caller must Close it.
+func (c *Client) HandshakeSession(ctx context.Context, conn net.Conn, user, password, domain string) (*Session, error) {
+	return c.handshake(ctx, conn, user, password, domain, true)
+}
+
+// handshake implements CredSSP through pubKeyAuth verification and optionally
+// sends sealed TSCredentials (MS-CSSP 3.1.5).
+func (c *Client) handshake(ctx context.Context, conn net.Conn, user, password, domain string, delegate bool) (*Session, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
-		return fmt.Errorf("credssp: handshake requires a TLS connection")
+		return nil, fmt.Errorf("credssp: handshake requires a TLS connection")
 	}
 	serverPublicKey, err := serverSubjectPublicKey(tlsConn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	version := c.version()
@@ -101,55 +115,53 @@ func (c *Client) Handshake(ctx context.Context, conn net.Conn, user, password, d
 		domain = c.Domain
 	}
 
-	// Step 1: client NEGOTIATE.
+	OfferKerberos = kerberos.Available()
 	negotiate, err := ntlm.NegotiateMessage{Flags: flags}.Marshal()
 	if err != nil {
-		return fmt.Errorf("credssp: build NTLM NEGOTIATE: %w", err)
+		return nil, fmt.Errorf("credssp: build NTLM NEGOTIATE: %w", err)
 	}
 	negoInit, err := WrapNegTokenInit(negotiate)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := writeTSRequest(conn, TSRequest{Version: version, NegoTokens: [][]byte{negoInit}}); err != nil {
-		return err
+		return nil, err
 	}
 
-	// Step 2: server CHALLENGE.
 	resp, err := readTSRequest(ctx, conn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if resp.ErrorCode != nil {
-		return &NTStatusError{Code: *resp.ErrorCode}
+		return nil, &NTStatusError{Code: *resp.ErrorCode}
 	}
 	challengeToken, err := firstNTLMToken(resp.NegoTokens)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	challenge, err := ntlm.ParseChallenge(challengeToken)
 	if err != nil {
-		return fmt.Errorf("credssp: parse NTLM CHALLENGE: %w", err)
+		return nil, fmt.Errorf("credssp: parse NTLM CHALLENGE: %w", err)
 	}
 
-	// Step 3: NTLM AUTHENTICATE plus the public key binding.
 	timestamp := challengeTimestamp(challenge.TargetInfo)
 	clientChallenge := make([]byte, ntlm.ClientChallengeLen)
 	if _, err := rand.Read(clientChallenge); err != nil {
-		return fmt.Errorf("credssp: generate client challenge: %w", err)
+		return nil, fmt.Errorf("credssp: generate client challenge: %w", err)
 	}
 	const workstation = ""
 	authMsg, baseKey, err := ntlm.BuildAuthenticate(flags, domain, user, password, workstation,
 		challenge.ServerChallenge, challenge.TargetInfo, timestamp, clientChallenge)
 	if err != nil {
-		return fmt.Errorf("credssp: build NTLM AUTHENTICATE: %w", err)
+		return nil, fmt.Errorf("credssp: build NTLM AUTHENTICATE: %w", err)
 	}
 	authDER, err := authMsg.Marshal()
 	if err != nil {
-		return fmt.Errorf("credssp: marshal NTLM AUTHENTICATE: %w", err)
+		return nil, fmt.Errorf("credssp: marshal NTLM AUTHENTICATE: %w", err)
 	}
 	negoResp, err := WrapNegTokenResp(authDER)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	security := ntlm.NewSessionSecurity(baseKey, flags, true)
@@ -160,42 +172,65 @@ func (c *Client) Handshake(ctx context.Context, conn net.Conn, user, password, d
 	case negotiated >= 5:
 		nonce := make([]byte, 32)
 		if _, err := rand.Read(nonce); err != nil {
-			return fmt.Errorf("credssp: generate binding nonce: %w", err)
+			return nil, fmt.Errorf("credssp: generate binding nonce: %w", err)
 		}
 		request.ClientNonce = nonce
 		request.PubKeyAuth, err = pubKeyAuthV5(security, ClientServerHashMagic, nonce, serverPublicKey)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	default:
 		request.PubKeyAuth, err = pubKeyAuthV2(security, serverPublicKey)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := writeTSRequest(conn, request); err != nil {
-		return err
+		return nil, err
 	}
 
-	// Step 4: server proves possession of the TLS keying material.
 	final, err := readTSRequest(ctx, conn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if final.ErrorCode != nil {
-		return &NTStatusError{Code: *final.ErrorCode}
+		return nil, &NTStatusError{Code: *final.ErrorCode}
 	}
 	if final.Version != resp.Version {
-		return fmt.Errorf("credssp: server changed version from %d to %d", resp.Version, final.Version)
+		return nil, fmt.Errorf("credssp: server changed version from %d to %d", resp.Version, final.Version)
 	}
 	if len(final.PubKeyAuth) == 0 {
-		return fmt.Errorf("credssp: server did not return a pubKeyAuth binding")
+		return nil, fmt.Errorf("credssp: server did not return a pubKeyAuth binding")
 	}
 	if negotiated >= 5 {
 		want := bindingHash(ServerClientHashMagic, request.ClientNonce, serverPublicKey)
-		return verifyServerBinding(security, final.PubKeyAuth, want)
+		if err := verifyServerBinding(security, final.PubKeyAuth, want); err != nil {
+			return nil, err
+		}
+	} else if err := verifyServerKeyEcho(security, final.PubKeyAuth, serverPublicKey); err != nil {
+		return nil, err
 	}
-	return verifyServerKeyEcho(security, final.PubKeyAuth, serverPublicKey)
+
+	if !delegate {
+		return &Session{Conn: tlsConn, Security: security, Version: negotiated}, nil
+	}
+
+	credDER, err := BuildPasswordCredentials(domain, user, password)
+	if err != nil {
+		return nil, err
+	}
+	sealed := security.Seal(credDER)
+	if err := writeTSRequest(conn, TSRequest{Version: version, AuthInfo: sealed}); err != nil {
+		return nil, err
+	}
+	// Some servers send an empty follow-up TSRequest; tolerate EOF/timeout.
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if follow, err := readTSRequest(ctx, conn); err == nil && follow.ErrorCode != nil {
+		return nil, &NTStatusError{Code: *follow.ErrorCode}
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+
+	return &Session{Conn: tlsConn, Security: security, Version: negotiated}, nil
 }
 
 func (c *Client) version() int {

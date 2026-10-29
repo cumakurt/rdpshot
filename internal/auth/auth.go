@@ -20,12 +20,13 @@ import (
 
 // Classified errors; callers use errors.Is.
 var (
-	ErrAuthFailed    = errors.New("authentication failed")
-	ErrAccountLocked = errors.New("account locked or disabled")
-	ErrNLARequired   = errors.New("endpoint does not support NLA authentication")
-	ErrProtocol      = errors.New("protocol error")
-	ErrTimeout       = errors.New("timeout")
-	ErrNetwork       = errors.New("network error")
+	ErrAuthFailed         = errors.New("authentication failed")
+	ErrAccountLocked      = errors.New("account locked or disabled")
+	ErrSmartCardRequired  = errors.New("smart-card logon required")
+	ErrNLARequired        = errors.New("endpoint does not support NLA authentication")
+	ErrProtocol           = errors.New("protocol error")
+	ErrTimeout            = errors.New("timeout")
+	ErrNetwork            = errors.New("network error")
 )
 
 // Authenticator verifies one credential against one RDP endpoint.
@@ -163,6 +164,8 @@ func mapNTStatus(code uint32) error {
 		return fmt.Errorf("%w: NTSTATUS 0x%08x", ErrAuthFailed, code)
 	case credssp.StatusAccountLockedOut, credssp.StatusAccountDisabled:
 		return fmt.Errorf("%w: NTSTATUS 0x%08x", ErrAccountLocked, code)
+	case credssp.StatusSmartcardLogonRequired, credssp.StatusSmartcardWrongPIN, credssp.StatusSmartcardCardNotPresent:
+		return fmt.Errorf("%w: NTSTATUS 0x%08x", ErrSmartCardRequired, code)
 	case credssp.StatusNotSupported:
 		return fmt.Errorf("%w: NTSTATUS 0x%08x", ErrProtocol, code)
 	default:
