@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -267,6 +268,75 @@ func TestReportUnknownFormat(t *testing.T) {
 			t.Fatalf("format %q status = %d, want 400", format, resp.StatusCode)
 		}
 		resp.Body.Close()
+	}
+}
+
+func TestReportsExportScanSelector(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	scanA := seededScan(t, env.store, "scan-exp0000000000a", model.ScanCompleted)
+	_ = seededScan(t, env.store, "scan-exp0000000000b", model.ScanCompleted)
+
+	pngPath := filepath.Join(env.outputs, "shot-export.png")
+	writeMinimalPNG(t, pngPath)
+	if _, err := env.store.InsertScreenshot(model.Screenshot{
+		ScanID:     scanA.ID,
+		Address:    "10.0.0.9",
+		Port:       3389,
+		Username:   "rdp-login",
+		FilePath:   pngPath,
+		CapturedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("insert screenshot: %v", err)
+	}
+
+	resp := get(t, env.http.URL+"/api/v1/reports/export?format=csv&scan="+scanA.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("single export status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, scanA.ID) {
+		t.Fatalf("content disposition = %q", cd)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "SCREENSHOT") {
+		t.Fatalf("csv export missing SCREENSHOT row: %q", body)
+	}
+
+	allResp := get(t, env.http.URL+"/api/v1/reports/export?format=html&scan=all")
+	if allResp.StatusCode != http.StatusOK {
+		t.Fatalf("all export status = %d, body: %s", allResp.StatusCode, readBody(t, allResp))
+	}
+	allBody := readBody(t, allResp)
+	if !strings.Contains(allBody, "All scans") {
+		t.Fatal("combined html missing all-scans title")
+	}
+	if !strings.Contains(allBody, `src="data:image/png;base64,`) {
+		t.Fatal("combined html must embed screenshot bytes")
+	}
+
+	pdfResp := get(t, env.http.URL+"/api/v1/reports/export?format=pdf&scan=all")
+	if pdfResp.StatusCode != http.StatusOK {
+		t.Fatalf("pdf export status = %d", pdfResp.StatusCode)
+	}
+	pdfBody, err := io.ReadAll(pdfResp.Body)
+	pdfResp.Body.Close()
+	if err != nil {
+		t.Fatalf("read pdf: %v", err)
+	}
+	if len(pdfBody) < 100 || !bytes.HasPrefix(pdfBody, []byte("%PDF")) {
+		t.Fatalf("pdf export is not a PDF (%d bytes)", len(pdfBody))
+	}
+}
+
+func writeMinimalPNG(t *testing.T, path string) {
+	t.Helper()
+	// 1x1 PNG
+	const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W2/0AAAAASUVORK5CYII="
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("decode png: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write png: %v", err)
 	}
 }
 

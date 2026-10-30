@@ -17,6 +17,7 @@ import (
 	"rdpshot/internal/model"
 	"rdpshot/internal/reporter"
 	"rdpshot/internal/score"
+	"rdpshot/internal/screenshot"
 	"rdpshot/internal/target"
 )
 
@@ -794,8 +795,7 @@ func (s *Server) handleScanReport(w http.ResponseWriter, r *http.Request) {
 }
 
 // reportData assembles the self-contained report payload. Credentials are
-// masked and screenshot paths are rewritten to web URLs before they reach the
-// generator.
+// masked; screenshot FilePath values stay on-disk so HTML/PDF can embed bytes.
 func (s *Server) reportData(scan model.Scan) (reporter.Data, error) {
 	summary, err := s.deps.Store.Summary(scan.ID)
 	if err != nil {
@@ -835,7 +835,8 @@ func (s *Server) reportData(scan model.Scan) (reporter.Data, error) {
 		Hosts:          hosts,
 		Findings:       findings,
 		Credentials:    maskCredentials(creds),
-		Screens:        screenshotViews(screens),
+		// Keep on-disk paths so HTML/PDF can embed image bytes.
+		Screens:        reportScreenshotFiles(screens),
 		CVEStats:       cveStats,
 		GeneratedAt:    time.Now().UTC(),
 		ToolVersion:    s.cfg.ToolVersion,
@@ -843,6 +844,151 @@ func (s *Server) reportData(scan model.Scan) (reporter.Data, error) {
 		HardeningScore: sc.Score,
 		HardeningGrade: sc.Grade,
 	}, nil
+}
+
+// reportScreenshotFiles drops synthetic detection cards but keeps filesystem
+// paths intact for report image embedding.
+func reportScreenshotFiles(screens []model.Screenshot) []model.Screenshot {
+	out := make([]model.Screenshot, 0, len(screens))
+	for _, sc := range screens {
+		if sc.Username == screenshot.OpenHostLabel {
+			continue
+		}
+		out = append(out, sc)
+	}
+	return out
+}
+
+// combinedReportData merges every recent scan into one exportable report.
+func (s *Server) combinedReportData() (reporter.Data, error) {
+	scans, err := s.deps.Store.ListScans(recentScansLimit)
+	if err != nil {
+		return reporter.Data{}, err
+	}
+	if len(scans) == 0 {
+		return reporter.Data{}, fmt.Errorf("no scans available to export")
+	}
+	summary, err := s.deps.Store.Summary("")
+	if err != nil {
+		return reporter.Data{}, err
+	}
+	branding, err := s.deps.Store.GetReportBranding()
+	if err != nil {
+		return reporter.Data{}, err
+	}
+	var (
+		hosts    []model.Host
+		findings []model.Finding
+		creds    []model.Credential
+		screens  []model.Screenshot
+		cves     []model.CVEStat
+	)
+	for _, sc := range scans {
+		h, err := s.deps.Store.ListHosts(sc.ID)
+		if err != nil {
+			return reporter.Data{}, err
+		}
+		hosts = append(hosts, h...)
+		f, err := s.deps.Store.ListFindings(sc.ID)
+		if err != nil {
+			return reporter.Data{}, err
+		}
+		findings = append(findings, f...)
+		c, err := s.deps.Store.ListCredentials(sc.ID)
+		if err != nil {
+			return reporter.Data{}, err
+		}
+		creds = append(creds, c...)
+		sh, err := s.deps.Store.ListScreenshots(sc.ID)
+		if err != nil {
+			return reporter.Data{}, err
+		}
+		screens = append(screens, reportScreenshotFiles(sh)...)
+	}
+	cves, err = s.deps.Store.CVEStats("")
+	if err != nil {
+		return reporter.Data{}, err
+	}
+	sc := score.EvaluateScan("all", hosts, findings)
+	now := time.Now().UTC()
+	return reporter.Data{
+		Scan: model.Scan{
+			ID:        "all",
+			Name:      fmt.Sprintf("All scans (%d)", len(scans)),
+			Status:    model.ScanCompleted,
+			CreatedAt: now,
+			Options:   model.ScanOptions{Targets: []string{"*"}},
+		},
+		Summary:        summary,
+		Hosts:          hosts,
+		Findings:       findings,
+		Credentials:    maskCredentials(creds),
+		Screens:        screens,
+		CVEStats:       cves,
+		GeneratedAt:    now,
+		ToolVersion:    s.cfg.ToolVersion,
+		Branding:       branding,
+		HardeningScore: sc.Score,
+		HardeningGrade: sc.Grade,
+	}, nil
+}
+
+// handleReportsExport downloads a report for one scan or every scan (scan=all).
+func (s *Server) handleReportsExport(w http.ResponseWriter, r *http.Request) {
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	scanID := strings.TrimSpace(r.URL.Query().Get("scan"))
+	if scanID == "" {
+		scanID = "all"
+	}
+
+	var (
+		data reporter.Data
+		err  error
+		name string
+	)
+	if scanID == "all" {
+		data, err = s.combinedReportData()
+		name = "all"
+	} else {
+		scan, ok := s.loadScan(w, r, scanID)
+		if !ok {
+			return
+		}
+		data, err = s.reportData(scan)
+		name = scan.ID
+	}
+	if err != nil {
+		s.internalError(w, r, "load report data", err)
+		return
+	}
+
+	var buf bytes.Buffer
+	var contentType string
+	switch format {
+	case "html":
+		contentType = "text/html; charset=utf-8"
+		err = reporter.HTML(&buf, data)
+	case "csv":
+		contentType = "text/csv"
+		err = reporter.CSV(&buf, data)
+	case "pdf":
+		contentType = "application/pdf"
+		err = reporter.PDF(&buf, data)
+	default:
+		s.writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("unknown report format %q", format))
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, "render report", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="rdpshot-%s.%s"`, name, format))
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.deps.Logger.Error("write report export", "scan_id", name, "error", err.Error())
+	}
 }
 
 // splitTargets breaks the form target field on commas and whitespace.

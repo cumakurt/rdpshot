@@ -37,10 +37,28 @@ type DashboardData struct {
 	Wordlists    WordlistPickerData
 }
 
-// ScansData renders the scan list page.
+// ScansDashboardStats aggregates lifecycle and result counters for the scans hub.
+type ScansDashboardStats struct {
+	Total       int
+	Active      int // pending + running + paused
+	Pending     int
+	Running     int
+	Paused      int
+	Completed   int
+	Failed      int
+	Cancelled   int
+	Findings    int64
+	Creds       int64
+	Screens     int64
+	Engagements int
+}
+
+// ScansData renders the scans dashboard (KPIs + active jobs + inventory).
 type ScansData struct {
 	Title, ActiveNav string
 	Scans            []model.Scan
+	ActiveScans      []model.Scan
+	Stats            ScansDashboardStats
 }
 
 // ScanDetailData renders one scan with all of its results.
@@ -64,10 +82,18 @@ type EstateData struct {
 	Scans            []model.Scan
 }
 
+// GalleryItem is one gallery card with its owning scan label.
+type GalleryItem struct {
+	model.Screenshot
+	ScanName string
+}
+
 // GalleryData renders the screenshot gallery page.
 type GalleryData struct {
 	Title, ActiveNav string
-	Items            []model.Screenshot
+	Items            []GalleryItem
+	Scans            []model.Scan
+	SelectedScanID   string
 }
 
 // ReportsData renders the vulnerability and reporting hub.
@@ -160,18 +186,60 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 // recentScansLimit bounds the dashboard and scans tables.
 const recentScansLimit = 100
 
-// handleScans renders the scan list page.
+// handleScans renders the scans dashboard.
 func (s *Server) handleScans(w http.ResponseWriter, r *http.Request) {
 	scans, err := s.deps.Store.ListScans(recentScansLimit)
 	if err != nil {
 		s.internalError(w, r, "load scans", err)
 		return
 	}
+	stats, active := buildScansDashboard(scans)
 	s.renderPage(w, "scans", ScansData{
-		Title:     "Scans",
-		ActiveNav: "scans",
-		Scans:     scans,
+		Title:       "Scans Dashboard",
+		ActiveNav:   "scans",
+		Scans:       scans,
+		ActiveScans: active,
+		Stats:       stats,
 	})
+}
+
+// buildScansDashboard derives KPI counters and the active-job subset from a
+// scan inventory. Counts are over the provided slice (recent window), not the
+// entire historical database when the list is truncated.
+func buildScansDashboard(scans []model.Scan) (ScansDashboardStats, []model.Scan) {
+	stats := ScansDashboardStats{Total: len(scans)}
+	engagements := make(map[string]struct{})
+	active := make([]model.Scan, 0)
+	for _, sc := range scans {
+		stats.Findings += sc.Progress.Findings
+		stats.Creds += sc.Progress.Creds
+		stats.Screens += sc.Progress.Screens
+		if name := strings.TrimSpace(sc.Engagement); name != "" {
+			engagements[name] = struct{}{}
+		}
+		switch sc.Status {
+		case model.ScanPending:
+			stats.Pending++
+			stats.Active++
+			active = append(active, sc)
+		case model.ScanRunning:
+			stats.Running++
+			stats.Active++
+			active = append(active, sc)
+		case model.ScanPaused:
+			stats.Paused++
+			stats.Active++
+			active = append(active, sc)
+		case model.ScanCompleted:
+			stats.Completed++
+		case model.ScanFailed:
+			stats.Failed++
+		case model.ScanCancelled:
+			stats.Cancelled++
+		}
+	}
+	stats.Engagements = len(engagements)
+	return stats, active
 }
 
 // handleScanDetail renders one scan with its hosts, findings, credentials and
@@ -219,12 +287,23 @@ func (s *Server) handleScanDetail(w http.ResponseWriter, r *http.Request) {
 		Hosts:        openHostsOnly(hosts),
 		Findings:     findings,
 		Creds:        maskCredentials(creds),
-		AuthAttempts: authAttempts,
+		AuthAttempts: successfulAuthAttempts(authAttempts),
 		Screens:      screenshotViews(screens),
 		Summary:      summary,
 		Score:        score.EvaluateScan(scan.ID, hosts, findings),
 		Wordlists:    s.wordlistPicker("brute"),
 	})
+}
+
+// successfulAuthAttempts keeps verified logins for the Auth Attempts panel.
+func successfulAuthAttempts(attempts []model.AuthAttempt) []model.AuthAttempt {
+	out := make([]model.AuthAttempt, 0, len(attempts))
+	for _, a := range attempts {
+		if a.Outcome == model.AuthOutcomeSuccess {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // openHostsOnly keeps endpoints where RDP was actually discovered.
@@ -254,17 +333,44 @@ func (s *Server) handleEstatePage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGallery renders every captured screenshot across all scans.
+// handleGallery renders captured screenshots across scans. Optional query
+// param scan=<id> limits the vault to one audit; omit it to show every frame.
 func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
-	items, err := s.allScreenshots()
+	scans, err := s.deps.Store.ListScans(recentScansLimit)
+	if err != nil {
+		s.internalError(w, r, "load scans", err)
+		return
+	}
+	selected := strings.TrimSpace(r.URL.Query().Get("scan"))
+	items, err := s.galleryItems(scans, selected)
 	if err != nil {
 		s.internalError(w, r, "load screenshots", err)
 		return
 	}
+	// Dropdown only lists scans that actually have gallery-worthy frames.
+	scanOptions, err := s.scansWithScreenshots(scans)
+	if err != nil {
+		s.internalError(w, r, "load gallery scans", err)
+		return
+	}
+	if selected != "" {
+		found := false
+		for _, sc := range scanOptions {
+			if sc.ID == selected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			selected = ""
+		}
+	}
 	s.renderPage(w, "gallery", GalleryData{
-		Title:     "Gallery",
-		ActiveNav: "gallery",
-		Items:     screenshotViews(items),
+		Title:          "Gallery",
+		ActiveNav:      "gallery",
+		Items:          items,
+		Scans:          scanOptions,
+		SelectedScanID: selected,
 	})
 }
 
@@ -375,25 +481,47 @@ func (s *Server) loadScan(w http.ResponseWriter, r *http.Request, id string) (mo
 	return scan, true
 }
 
-// allScreenshots collects screenshots of every scan, newest first. The store
-// exposes screenshots per scan, so the scan list is the index.
-func (s *Server) allScreenshots() ([]model.Screenshot, error) {
-	scans, err := s.deps.Store.ListScans(recentScansLimit)
-	if err != nil {
-		return nil, err
-	}
-	var items []model.Screenshot
+// galleryItems builds gallery cards for every scan, or one selected scan.
+func (s *Server) galleryItems(scans []model.Scan, selectedScanID string) ([]GalleryItem, error) {
+	names := make(map[string]string, len(scans))
 	for _, sc := range scans {
+		names[sc.ID] = sc.Name
+	}
+	var items []GalleryItem
+	for _, sc := range scans {
+		if selectedScanID != "" && sc.ID != selectedScanID {
+			continue
+		}
 		shots, err := s.deps.Store.ListScreenshots(sc.ID)
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, shots...)
+		for _, shot := range screenshotViews(shots) {
+			items = append(items, GalleryItem{
+				Screenshot: shot,
+				ScanName:   names[sc.ID],
+			})
+		}
 	}
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].CapturedAt.After(items[j].CapturedAt)
 	})
 	return items, nil
+}
+
+// scansWithScreenshots returns scans that own at least one gallery frame.
+func (s *Server) scansWithScreenshots(scans []model.Scan) ([]model.Scan, error) {
+	out := make([]model.Scan, 0, len(scans))
+	for _, sc := range scans {
+		shots, err := s.deps.Store.ListScreenshots(sc.ID)
+		if err != nil {
+			return nil, err
+		}
+		if len(screenshotViews(shots)) > 0 {
+			out = append(out, sc)
+		}
+	}
+	return out, nil
 }
 
 // maskCredentials hides every secret before display or serialization.

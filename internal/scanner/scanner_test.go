@@ -525,8 +525,8 @@ func TestRunSkipsAuthWithoutCredSSP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("attempts: %v", err)
 	}
-	if len(attempts) != 1 || attempts[0].Outcome != model.AuthOutcomeSkipped {
-		t.Fatalf("attempts = %+v", attempts)
+	if len(attempts) != 0 {
+		t.Fatalf("attempts = %+v, want none (skipped/invalid are not persisted)", attempts)
 	}
 }
 

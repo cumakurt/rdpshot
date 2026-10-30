@@ -305,7 +305,7 @@ resolved defaults.
 reachable beyond localhost, set `--token` (or `RDSHOT_TOKEN`): every route then
 requires `Authorization: Bearer <token>` or `?token=`.
 
-Web pages: `/` dashboard, `/scans` history, `/scans/{id}` live scan detail,
+Web pages: `/` command-center dashboard, `/scans` scans dashboard (KPIs + inventory), `/scans/{id}` live scan detail,
 `/compare` scan diff, `/engagements` workspace, `/schedules` recurring audits,
 `/gallery` screenshot gallery, `/reports` report center, `/about` developer
 credits. Screenshot images are served read-only under `/files/`. Every page
@@ -327,7 +327,8 @@ footer shows the build version and developer attribution.
 | `GET` | `/api/v1/scans/{id}/hosts` | Hosts of a scan |
 | `GET` | `/api/v1/scans/{id}/screenshots` | Screenshot metadata of a scan |
 | `GET` | `/api/v1/scans/{id}/credentials` | Verified credentials (masked) |
-| `GET` | `/api/v1/scans/{id}/report?format=html\|csv\|pdf` | Download a report |
+| `GET` | `/api/v1/scans/{id}/report?format=html\|csv\|pdf` | Download a report for one scan |
+| `GET` | `/api/v1/reports/export?format=html\|csv\|pdf&scan={id}\|all` | Download a report for one scan or all scans (embeds screenshots) |
 | `GET` | `/api/v1/schedules` | List recurring schedules |
 | `POST` | `/api/v1/schedules` | Create a recurring schedule |
 | `GET` | `/api/v1/schedules/{id}` | Schedule detail |

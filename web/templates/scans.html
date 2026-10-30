@@ -10,19 +10,156 @@
       <section class="page-head">
         <div>
           <p class="page-eyebrow">Audits</p>
-          <h1 class="page-title mt-1">Scans</h1>
-          <p class="page-subtitle">Every audit job executed against your authorized RDP estate.</p>
+          <h1 class="page-title mt-1">Scans Dashboard</h1>
+          <p class="page-subtitle">Operational hub for every RDP audit — status, yield and active jobs.</p>
         </div>
         <div class="page-actions">
           <a href="/compare" class="btn btn-ghost">Compare</a>
           <a href="/schedules" class="btn btn-ghost">Schedules</a>
+          <a href="/reports" class="btn btn-ghost">Reports</a>
           <a href="/" class="btn btn-primary">New Scan</a>
         </div>
       </section>
 
-      <section class="card">
+      <section class="stat-grid" aria-label="Scan statistics">
+        <article class="stat-card">
+          <div class="stat-top">
+            <p class="stat-label">Total Scans</p>
+            <span class="stat-icon stat-icon-indigo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M4 6h16M4 12h16M4 18h10"></path>
+              </svg>
+            </span>
+          </div>
+          <p class="stat-value">{{ .Stats.Total }}</p>
+          <p class="stat-meta">{{ .Stats.Engagements }} engagement{{ if ne .Stats.Engagements 1 }}s{{ end }}</p>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top">
+            <p class="stat-label">Active Jobs</p>
+            <span class="stat-icon stat-icon-indigo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M12 7v5l3 2"></path>
+              </svg>
+            </span>
+          </div>
+          <p class="stat-value tone-indigo">{{ .Stats.Active }}</p>
+          <p class="stat-meta">{{ .Stats.Running }} running · {{ .Stats.Paused }} paused · {{ .Stats.Pending }} pending</p>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top">
+            <p class="stat-label">Completed</p>
+            <span class="stat-icon stat-icon-emerald" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M20 6L9 17l-5-5"></path>
+              </svg>
+            </span>
+          </div>
+          <p class="stat-value tone-emerald">{{ .Stats.Completed }}</p>
+          <p class="stat-meta">{{ .Stats.Failed }} failed · {{ .Stats.Cancelled }} cancelled</p>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top">
+            <p class="stat-label">Yield</p>
+            <span class="stat-icon stat-icon-amber" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"></path>
+              </svg>
+            </span>
+          </div>
+          <p class="stat-value">{{ .Stats.Findings }}</p>
+          <p class="stat-meta">
+            <span class="tone-emerald">{{ .Stats.Creds }}</span> creds ·
+            <span class="tone-amber">{{ .Stats.Screens }}</span> screens
+          </p>
+        </article>
+      </section>
+
+      {{ if .ActiveScans }}
+      <section class="card mb-6">
+        <div class="card-head">
+          <h2 class="card-title">Active scans</h2>
+          <span class="badge badge-indigo">{{ len .ActiveScans }} live</span>
+        </div>
         <div class="table-wrap">
           <table class="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Open</th>
+                <th>Findings</th>
+                <th>Started</th>
+                <th class="col-actions"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{ range .ActiveScans }}
+              <tr class="row-hover">
+                <td>
+                  <p class="cell-strong"><a href="/scans/{{ .ID }}">{{ .Name }}</a></p>
+                  <p class="cell-sub">{{ .ID }}</p>
+                </td>
+                <td>
+                  {{ if eq .Status "running" }}<span class="badge badge-indigo">{{ .Status }}</span>{{ else if eq .Status "paused" }}<span class="badge badge-amber">{{ .Status }}</span>{{ else }}<span class="badge badge-amber">{{ .Status }}</span>{{ end }}
+                </td>
+                <td>
+                  <div class="progress-cell" data-progress data-done="{{ .Progress.Done }}" data-total="{{ .Progress.Total }}" role="progressbar" aria-label="Scan progress">
+                    <div class="progress">
+                      <div class="progress-fill" data-progress-fill></div>
+                    </div>
+                    <span class="progress-label" data-progress-label>{{ .Progress.Done }}/{{ .Progress.Total }}</span>
+                  </div>
+                </td>
+                <td class="cell-mono">{{ .Progress.Open }}</td>
+                <td class="cell-mono">{{ .Progress.Findings }}</td>
+                <td class="cell-mono">{{ if .StartedAt }}{{ .StartedAt.Format "2006-01-02 15:04" }}{{ else }}{{ .CreatedAt.Format "2006-01-02 15:04" }}{{ end }}</td>
+                <td class="col-actions text-right whitespace-nowrap">
+                  <a href="/scans/{{ .ID }}" class="btn btn-ghost btn-sm">Open</a>
+                  {{ if eq .Status "running" }}
+                  <button type="button" data-pause-scan="{{ .ID }}" class="btn btn-ghost btn-sm">Pause</button>
+                  {{ else if eq .Status "paused" }}
+                  <button type="button" data-resume-scan="{{ .ID }}" class="btn btn-ghost btn-sm">Resume</button>
+                  {{ end }}
+                </td>
+              </tr>
+              {{ end }}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {{ end }}
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Scan inventory</h2>
+            <p class="card-hint">Filter by status or search by name, engagement, or scan id.</p>
+          </div>
+          <div class="flex flex-wrap items-end gap-3">
+            <div class="field" style="min-width:10rem;margin:0">
+              <label class="label" for="scans-status-filter">Status</label>
+              <select id="scans-status-filter" class="input" data-scans-status>
+                <option value="">All statuses</option>
+                <option value="running">Running</option>
+                <option value="pending">Pending</option>
+                <option value="paused">Paused</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+            <div class="field" style="min-width:14rem;margin:0">
+              <label class="label" for="scans-search">Search</label>
+              <input id="scans-search" type="search" class="input" data-scans-search
+                placeholder="Name, engagement, id…">
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table" data-scans-table>
             <thead>
               <tr>
                 <th>Name</th>
@@ -40,7 +177,9 @@
             <tbody>
               {{ if .Scans }}
                 {{ range .Scans }}
-                <tr class="row-hover">
+                <tr class="row-hover" data-scan-row
+                  data-status="{{ .Status }}"
+                  data-search="{{ .Name }} {{ .ID }} {{ .Engagement }}{{ range .Tags }} {{ . }}{{ end }}">
                   <td>
                     <p class="cell-strong"><a href="/scans/{{ .ID }}">{{ .Name }}</a></p>
                     <p class="cell-sub">{{ .ID }}{{ if .Tags }} · {{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}{{ $t }}{{ end }}{{ end }}</p>
@@ -74,15 +213,19 @@
                 </tr>
                 {{ end }}
               {{ else }}
-                <tr>
+                <tr data-scans-empty-static>
                   <td colspan="10" class="table-empty">
-                    No scans recorded yet. Start one from the <a href="/">Dashboard</a>.
+                    No scans recorded yet. Start one from the <a href="/">Command Center</a>.
                   </td>
                 </tr>
               {{ end }}
+              <tr class="hidden" data-scans-empty-filter>
+                <td colspan="10" class="table-empty">No scans match the current filters.</td>
+              </tr>
             </tbody>
           </table>
         </div>
+        <p class="card-hint mt-3 px-4 pb-4" data-scans-count>{{ len .Scans }} scan{{ if ne (len .Scans) 1 }}s{{ end }} shown</p>
       </section>
     </main>
     {{ template "footer" . }}

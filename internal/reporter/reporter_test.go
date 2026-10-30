@@ -140,6 +140,7 @@ func testReportData() Data {
 
 func TestCSV(t *testing.T) {
 	d := testReportData()
+	d.Screens[0].FilePath = writeTestPNG(t)
 	var buf bytes.Buffer
 	if err := CSV(&buf, d); err != nil {
 		t.Fatalf("CSV() error: %v", err)
@@ -150,8 +151,8 @@ func TestCSV(t *testing.T) {
 	if lines[0] != wantHeader {
 		t.Fatalf("header mismatch:\ngot  %q\nwant %q", lines[0], wantHeader)
 	}
-	if len(lines) != 4 {
-		t.Fatalf("want 1 header + 3 data rows, got %d lines", len(lines))
+	if len(lines) != 5 {
+		t.Fatalf("want 1 header + 3 findings + 1 screenshot, got %d lines", len(lines))
 	}
 	if strings.Contains(buf.String(), testRawSecret) {
 		t.Error("csv output contains the raw secret")
@@ -165,11 +166,18 @@ func TestCSV(t *testing.T) {
 		t.Errorf("rows are not sorted by severity: got %q, %q, %q",
 			records[1][3], records[2][3], records[3][3])
 	}
-	for _, record := range records[1:] {
+	for _, record := range records[1:4] {
 		evidence := record[10]
 		if strings.ContainsAny(evidence, "\r\n") {
 			t.Errorf("evidence %q must stay on a single line", evidence)
 		}
+	}
+	shot := records[4]
+	if shot[3] != screenshotCheckID {
+		t.Fatalf("screenshot row check_id = %q, want %q", shot[3], screenshotCheckID)
+	}
+	if shot[1] != "10.0.0.1" || shot[11] == "" {
+		t.Fatalf("unexpected screenshot row: %#v", shot)
 	}
 }
 

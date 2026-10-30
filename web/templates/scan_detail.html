@@ -232,14 +232,14 @@
               <p class="text-sm text-subtle">No valid credentials were verified in this scan.</p>
               {{ end }}
               {{ if .AuthAttempts }}
-              <p class="item-meta mt-3">{{ len .AuthAttempts }} auth attempt(s) recorded (secrets never stored).</p>
+              <p class="item-meta mt-3">{{ len .AuthAttempts }} successful auth attempt(s) (secrets never stored).</p>
               {{ end }}
             </div>
           </div>
 
           <div class="card">
             <div class="card-head">
-              <h2 class="card-title">Auth Attempts</h2>
+              <h2 class="card-title">Successful Auth Attempts</h2>
               <span class="badge badge-slate">{{ len .AuthAttempts }}</span>
             </div>
             <div class="card-body">
@@ -261,7 +261,7 @@
                       <td class="cell-mono text-xs">{{ .AttemptedAt.Format "15:04:05" }}</td>
                       <td class="cell-mono text-xs">{{ .Address }}:{{ .Port }}</td>
                       <td class="cell-mono text-xs">{{ if .Domain }}{{ .Domain }}\{{ end }}{{ if .Username }}{{ .Username }}{{ else }}—{{ end }}</td>
-                      <td><span class="badge badge-slate">{{ .Outcome }}</span></td>
+                      <td><span class="badge badge-emerald">{{ .Outcome }}</span></td>
                       <td class="text-xs text-subtle">{{ .Detail }}</td>
                     </tr>
                     {{ end }}
@@ -269,7 +269,7 @@
                 </table>
               </div>
               {{ else }}
-              <p class="text-sm text-subtle">No credential audit attempts recorded for this scan.</p>
+              <p class="text-sm text-subtle">No successful credential audits recorded for this scan.</p>
               {{ end }}
             </div>
           </div>

@@ -1009,10 +1009,24 @@
     }
 
     var errorBox = document.getElementById('export-error');
+    var scanSelect = document.querySelector('[data-report-scan]');
+
+    function exportURL(button) {
+      var base = button.getAttribute('data-export-base');
+      var format = button.getAttribute('data-export-format') || 'bin';
+      if (base) {
+        var scan = 'all';
+        if (scanSelect && scanSelect.value) {
+          scan = scanSelect.value;
+        }
+        return base + '?format=' + encodeURIComponent(format) + '&scan=' + encodeURIComponent(scan);
+      }
+      return button.getAttribute('data-export-url') || '';
+    }
 
     Array.prototype.forEach.call(buttons, function (button) {
       button.addEventListener('click', function () {
-        var url = button.getAttribute('data-export-url');
+        var url = exportURL(button);
         if (!url || button.disabled) {
           return;
         }
@@ -1468,13 +1482,69 @@
     load();
   }
 
+  function initScansDashboard() {
+    var rows = document.querySelectorAll('[data-scan-row]');
+    var statusSelect = document.querySelector('[data-scans-status]');
+    var searchInput = document.querySelector('[data-scans-search]');
+    var countEl = document.querySelector('[data-scans-count]');
+    var emptyFilter = document.querySelector('[data-scans-empty-filter]');
+    if (!rows.length || (!statusSelect && !searchInput)) {
+      return;
+    }
+
+    function applyFilter() {
+      var status = statusSelect ? statusSelect.value : '';
+      var query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+      var visible = 0;
+      Array.prototype.forEach.call(rows, function (row) {
+        var rowStatus = row.getAttribute('data-status') || '';
+        var haystack = (row.getAttribute('data-search') || '').toLowerCase();
+        var matchStatus = !status || rowStatus === status;
+        var matchQuery = !query || haystack.indexOf(query) !== -1;
+        var show = matchStatus && matchQuery;
+        row.style.display = show ? '' : 'none';
+        if (show) {
+          visible += 1;
+        }
+      });
+      if (countEl) {
+        var total = rows.length;
+        if (status || query) {
+          countEl.textContent = visible + ' of ' + total + ' scans match';
+        } else {
+          countEl.textContent = total + ' scan' + (total === 1 ? '' : 's') + ' shown';
+        }
+      }
+      if (emptyFilter) {
+        emptyFilter.classList.toggle('hidden', visible > 0 || rows.length === 0);
+      }
+    }
+
+    if (statusSelect) {
+      statusSelect.addEventListener('change', applyFilter);
+    }
+    if (searchInput) {
+      searchInput.addEventListener('input', applyFilter);
+    }
+  }
+
   function initGallery() {
     var items = document.querySelectorAll('[data-gallery-item]');
     var input = document.querySelector('[data-gallery-search]');
+    var scanSelect = document.querySelector('[data-gallery-scan]');
     var counter = document.getElementById('gallery-count');
     var noMatch = document.getElementById('gallery-no-match');
     var lightbox = document.getElementById('gallery-lightbox');
     var lightboxImage = document.getElementById('gallery-lightbox-image');
+
+    if (scanSelect) {
+      scanSelect.addEventListener('change', function () {
+        var form = scanSelect.form || document.getElementById('gallery-scan-filter');
+        if (form) {
+          form.submit();
+        }
+      });
+    }
 
     function applyFilter() {
       if (!input) {
@@ -1486,7 +1556,8 @@
       Array.prototype.forEach.call(items, function (item) {
         var haystack = (
           (item.getAttribute('data-address') || '') + ' ' +
-          (item.getAttribute('data-username') || '')
+          (item.getAttribute('data-username') || '') + ' ' +
+          (item.getAttribute('data-scan-name') || '')
         ).toLowerCase();
         var match = !query || haystack.indexOf(query) !== -1;
         item.style.display = match ? '' : 'none';
@@ -1501,7 +1572,7 @@
           items.length + ' items captured';
       }
       if (noMatch) {
-        noMatch.classList.toggle('hidden', visible > 0);
+        noMatch.classList.toggle('hidden', visible > 0 || items.length === 0);
       }
     }
 
@@ -2621,6 +2692,7 @@
     initSIEMForm();
     initAdminPanels();
     initGallery();
+    initScansDashboard();
     initEstateMap();
   });
 })();

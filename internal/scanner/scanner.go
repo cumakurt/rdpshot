@@ -412,6 +412,11 @@ func (e *Engine) auditCredentials(ctx context.Context, scan *model.Scan, ep mode
 			_ = err
 		},
 		OnAttempt: func(cred model.Credential, outcome, detail string) {
+			// Timeline UI only surfaces verified logins; rejected/skipped rows
+			// stay out of auth_attempts to avoid noise.
+			if outcome != model.AuthOutcomeSuccess {
+				return
+			}
 			e.persistAuthAttempt(model.AuthAttempt{
 				ScanID: scan.ID, HostID: hostID, Address: ep.Address, Port: ep.Port,
 				Username: cred.Username, Domain: cred.Domain, Outcome: outcome, Detail: detail,
@@ -456,11 +461,6 @@ func (e *Engine) auditCredentials(ctx context.Context, scan *model.Scan, ep mode
 func (e *Engine) recordAuthSkipped(scan *model.Scan, ep model.Endpoint, hostID int64, logger *slog.Logger) {
 	reason := brute.StopReasonNoCredSSP
 	e.persistAuthSummary(hostID, 0, 0, reason, logger)
-	e.persistAuthAttempt(model.AuthAttempt{
-		ScanID: scan.ID, HostID: hostID, Address: ep.Address, Port: ep.Port,
-		Username: "", Outcome: model.AuthOutcomeSkipped, Detail: reason,
-		AttemptedAt: time.Now().UTC(),
-	}, logger)
 	e.log(scan.ID, "info", fmt.Sprintf("credential audit skipped for %s: %s", ep.Key(), reason))
 }
 

@@ -13,19 +13,36 @@
           <h1 class="page-title mt-1">Visual Session Vault</h1>
           <p class="page-subtitle">Real pre-auth login screens (TLS) and live desktop captures after a verified login. Synthetic detection cards are omitted.</p>
         </div>
-        <div class="w-full max-w-md">
-          <label for="gallery-search" class="label">Search evidence</label>
-          <input id="gallery-search" type="search" data-gallery-search
-            placeholder="Filter by IP address or username&hellip;"
-            class="input">
-          <p id="gallery-count" class="mt-1 text-xs text-subtle">{{ len .Items }} items captured</p>
+        <div class="w-full max-w-md space-y-3">
+          <form method="get" action="/gallery" class="form-stack" id="gallery-scan-filter">
+            <div class="field">
+              <label for="gallery-scan" class="label">Scan</label>
+              <select id="gallery-scan" name="scan" class="input" data-gallery-scan>
+                <option value="">All scans</option>
+                {{ range .Scans }}
+                <option value="{{ .ID }}" {{ if eq $.SelectedScanID .ID }}selected{{ end }}>{{ .Name }}{{ if .CreatedAt.IsZero }}{{ else }} ({{ .CreatedAt.Format "2006-01-02 15:04" }}){{ end }}</option>
+                {{ end }}
+              </select>
+            </div>
+          </form>
+          <div class="field">
+            <label for="gallery-search" class="label">Search evidence</label>
+            <input id="gallery-search" type="search" data-gallery-search
+              placeholder="Filter by IP, username, or scan name&hellip;"
+              class="input">
+            <p id="gallery-count" class="mt-1 text-xs text-subtle">{{ len .Items }} items captured{{ if .SelectedScanID }} in this scan{{ end }}</p>
+          </div>
         </div>
       </section>
 
       {{ if .Items }}
       <section class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="Evidence gallery">
         {{ range .Items }}
-        <figure class="gallery-card" data-gallery-item data-address="{{ .Address }}" data-username="{{ .Username }}">
+        <figure class="gallery-card" data-gallery-item
+          data-address="{{ .Address }}"
+          data-username="{{ .Username }}"
+          data-scan-name="{{ .ScanName }}"
+          data-scan-id="{{ .ScanID }}">
           <div class="gallery-thumb">
             {{ if eq .Username "rdp-open" }}
             <span class="gallery-badge">Detection</span>
@@ -50,6 +67,9 @@
           </div>
           <figcaption class="gallery-caption">
             <p class="gallery-title">{{ .Address }}:{{ .Port }}</p>
+            {{ if .ScanName }}
+            <p class="gallery-meta">scan: <span class="text-strong">{{ .ScanName }}</span></p>
+            {{ end }}
             <p class="gallery-meta">{{ if eq .Username "rdp-open" }}NLA/TLS blocked pre-auth UI · evidence only{{ else if eq .Username "rdp-login" }}login screen · no credential{{ else }}user: <span class="text-strong">{{ .Username }}</span>{{ end }}</p>
             <p class="gallery-note">{{ .CapturedAt.Format "2006-01-02 15:04:05" }}</p>
           </figcaption>
@@ -67,8 +87,13 @@
             <path d="M8 7l1.5-2.5h5L16 7"></path>
             <circle cx="12" cy="13.5" r="3"></circle>
           </svg>
+          {{ if .SelectedScanID }}
+          <p>No evidence images for this scan</p>
+          <a href="/gallery" class="btn btn-ghost btn-sm">Show all scans</a>
+          {{ else }}
           <p>No evidence images captured yet</p>
           <a href="/" class="btn btn-ghost btn-sm">Start a scan with screenshots enabled</a>
+          {{ end }}
         </div>
       </section>
       {{ end }}

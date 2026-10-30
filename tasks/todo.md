@@ -125,3 +125,18 @@ Out of scope: exploit/payload, LSASS/hash dump, lateral movement, C2, exfil.
 - [x] Root cause: deleted scans left `hosts` rows; dashboard counted all hosts
 - [x] DeleteScan also clears `auth_attempts`; wait for engine stop before delete
 - [x] PurgeOrphanScanChildren on DB open + after delete; Summary joins existing scans only
+
+## Scans Dashboard (2026-10-30)
+
+- [x] `/scans` upgraded to Scans Dashboard (KPI cards, active jobs, filtered inventory)
+- [x] Nav label + Command Center link updated
+- [x] Client status/search filters in `app.js`
+- [x] `buildScansDashboard` unit + template render tests
+
+## Reports export scan selector (2026-10-30)
+
+- [x] `/reports` scan dropdown: All + each scan
+- [x] `GET /api/v1/reports/export?format=&scan=id|all`
+- [x] Keep on-disk screenshot paths in reportData (fix web URL rewrite that broke embeds)
+- [x] PDF/HTML embed captures; CSV adds `SCREENSHOT` rows with base64 image
+- [x] Tests: reporter CSV + server export selector; live verify on :8722

@@ -129,6 +129,7 @@ func (s *Server) handleEvidencePack(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "list auth attempts for pack", err)
 		return
 	}
+	authAttempts = successfulAuthAttempts(authAttempts)
 
 	var htmlBuf bytes.Buffer
 	if err := reporter.HTML(&htmlBuf, data); err != nil {

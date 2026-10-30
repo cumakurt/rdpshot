@@ -13,27 +13,32 @@
           <h1 class="page-title mt-1">Vulnerability &amp; Reporting Hub</h1>
           <p class="page-subtitle">Risk distribution, CVE coverage and exportable audit reports.</p>
         </div>
-        {{ if .LatestScan }}
+        {{ if .Scans }}
         <div class="flex flex-col items-start gap-3 sm:items-end">
-          <p class="text-xs text-muted">
-            Latest scan:
-            <a href="/scans/{{ .LatestScan.ID }}" class="font-semibold tone-indigo">{{ .LatestScan.Name }}</a>
-          </p>
+          <div class="field" style="min-width:16rem">
+            <label class="label" for="report-scan">Scan</label>
+            <select id="report-scan" class="input" data-report-scan>
+              <option value="all" selected>All scans</option>
+              {{ range .Scans }}
+              <option value="{{ .ID }}">{{ .Name }}{{ if .CreatedAt.IsZero }}{{ else }} ({{ .CreatedAt.Format "2006-01-02 15:04" }}){{ end }}</option>
+              {{ end }}
+            </select>
+          </div>
           <div class="page-actions">
             <button type="button" id="export-pdf" data-export data-export-format="pdf"
-              data-export-url="/api/v1/scans/{{ .LatestScan.ID }}/report?format=pdf"
+              data-export-base="/api/v1/reports/export"
               class="btn btn-primary">
               <span class="spinner hidden" data-export-spinner aria-hidden="true"></span>
               <span data-export-label>Export PDF</span>
             </button>
             <button type="button" id="export-html" data-export data-export-format="html"
-              data-export-url="/api/v1/scans/{{ .LatestScan.ID }}/report?format=html"
+              data-export-base="/api/v1/reports/export"
               class="btn btn-ghost">
               <span class="spinner hidden" data-export-spinner aria-hidden="true"></span>
               <span data-export-label>Export HTML</span>
             </button>
             <button type="button" id="export-csv" data-export data-export-format="csv"
-              data-export-url="/api/v1/scans/{{ .LatestScan.ID }}/report?format=csv"
+              data-export-base="/api/v1/reports/export"
               class="btn btn-ghost">
               <span class="spinner hidden" data-export-spinner aria-hidden="true"></span>
               <span data-export-label>Export CSV</span>

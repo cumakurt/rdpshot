@@ -268,6 +268,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/scans/{id}/screenshots", s.handleScanScreenshots)
 	mux.HandleFunc("GET /api/v1/scans/{id}/credentials", s.handleScanCredentials)
 	mux.HandleFunc("GET /api/v1/scans/{id}/report", s.handleScanReport)
+	mux.HandleFunc("GET /api/v1/reports/export", s.handleReportsExport)
 	mux.HandleFunc("GET /api/v1/schedules", s.handleListSchedules)
 	mux.HandleFunc("POST /api/v1/schedules", s.handleCreateSchedule)
 	mux.HandleFunc("GET /api/v1/schedules/{id}", s.handleGetSchedule)

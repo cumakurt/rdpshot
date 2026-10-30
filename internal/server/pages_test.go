@@ -173,9 +173,18 @@ func buildSampleData() sampleData {
 			},
 		},
 		scans: ScansData{
-			Title:     "Scans",
-			ActiveNav: "scans",
-			Scans:     scans,
+			Title:       "Scans Dashboard",
+			ActiveNav:   "scans",
+			Scans:       scans,
+			ActiveScans: nil,
+			Stats: ScansDashboardStats{
+				Total:     2,
+				Completed: 1,
+				Failed:    1,
+				Findings:  scanA.Progress.Findings + scanB.Progress.Findings,
+				Creds:     scanA.Progress.Creds + scanB.Progress.Creds,
+				Screens:   scanA.Progress.Screens + scanB.Progress.Screens,
+			},
 		},
 		scanDetail: ScanDetailData{
 			Title:     "Scan " + scanA.Name,
@@ -195,7 +204,12 @@ func buildSampleData() sampleData {
 		gallery: GalleryData{
 			Title:     "Gallery",
 			ActiveNav: "gallery",
-			Items:     []model.Screenshot{screen},
+			Items: []GalleryItem{{
+				Screenshot: screen,
+				ScanName:   "lab audit",
+			}},
+			Scans:          []model.Scan{{ID: "scan-1", Name: "lab audit"}},
+			SelectedScanID: "",
 		},
 		reports: ReportsData{
 			Title:      "Reports",
@@ -373,6 +387,30 @@ func TestScreenshotViewsRewritesGalleryPaths(t *testing.T) {
 	}
 	if in[0].FilePath == out[0].FilePath {
 		t.Fatal("screenshotViews must not mutate the input slice element in place unexpectedly for callers that reuse DB rows")
+	}
+}
+
+func TestBuildScansDashboard(t *testing.T) {
+	scans := []model.Scan{
+		{Status: model.ScanCompleted, Engagement: "alpha", Progress: model.Progress{Findings: 2, Creds: 1, Screens: 1}},
+		{Status: model.ScanRunning, Engagement: "alpha", Progress: model.Progress{Findings: 1}},
+		{Status: model.ScanPaused, Engagement: "beta", Progress: model.Progress{}},
+		{Status: model.ScanFailed, Progress: model.Progress{Findings: 3}},
+		{Status: model.ScanCancelled},
+		{Status: model.ScanPending},
+	}
+	stats, active := buildScansDashboard(scans)
+	if stats.Total != 6 || stats.Active != 3 || stats.Running != 1 || stats.Paused != 1 || stats.Pending != 1 {
+		t.Fatalf("lifecycle stats = %+v", stats)
+	}
+	if stats.Completed != 1 || stats.Failed != 1 || stats.Cancelled != 1 {
+		t.Fatalf("terminal stats = %+v", stats)
+	}
+	if stats.Findings != 6 || stats.Creds != 1 || stats.Screens != 1 || stats.Engagements != 2 {
+		t.Fatalf("yield stats = %+v", stats)
+	}
+	if len(active) != 3 {
+		t.Fatalf("active len = %d, want 3", len(active))
 	}
 }
 
