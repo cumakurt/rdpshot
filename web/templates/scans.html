@@ -132,7 +132,7 @@
       </section>
       {{ end }}
 
-      <section class="card">
+      <section class="card mb-6">
         <div class="card-head">
           <div>
             <h2 class="card-title">Scan inventory</h2>
@@ -227,6 +227,71 @@
         </div>
         <p class="card-hint mt-3 px-4 pb-4" data-scans-count>{{ len .Scans }} scan{{ if ne (len .Scans) 1 }}s{{ end }} shown</p>
       </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Screenshots</h2>
+            <p class="card-hint">
+              {{ if .ScreensTotal }}
+                {{ if gt .ScreensTotal (len .Screens) }}
+                  Latest {{ len .Screens }} of {{ .ScreensTotal }} captures across scans.
+                {{ else }}
+                  {{ .ScreensTotal }} capture{{ if ne .ScreensTotal 1 }}s{{ end }} across scans.
+                {{ end }}
+              {{ else }}
+                Captured login screens and sessions appear here.
+              {{ end }}
+            </p>
+          </div>
+          <a href="/gallery" class="card-link">Open gallery</a>
+        </div>
+        {{ if .Screens }}
+        <div class="scans-screen-grid" aria-label="Screenshot grid">
+          {{ range .Screens }}
+          <figure class="scans-screen-card" data-gallery-item
+            data-address="{{ .Address }}"
+            data-username="{{ .Username }}"
+            data-scan-name="{{ .ScanName }}"
+            data-scan-id="{{ .ScanID }}">
+            <div class="scans-screen-thumb">
+              {{ if eq .Username "rdp-login" }}
+              <span class="gallery-badge gallery-badge-login">Login</span>
+              {{ else }}
+              <span class="gallery-badge gallery-badge-session">Session</span>
+              {{ end }}
+              <img src="{{ .FilePath }}"
+                alt="{{ if eq .Username "rdp-login" }}Pre-auth login screen for {{ .Address }}:{{ .Port }}{{ else }}RDP session from {{ .Address }}:{{ .Port }}{{ end }}"
+                loading="lazy"
+                data-gallery-image
+                onerror="this.classList.add('is-broken'); this.alt='Image missing on disk';">
+              <button type="button" class="scans-screen-open" data-lightbox-open
+                data-full-src="{{ .FilePath }}"
+                data-alt="{{ if eq .Username "rdp-login" }}Pre-auth login screen for {{ .Address }}:{{ .Port }}{{ else }}RDP session from {{ .Address }}:{{ .Port }}{{ end }}"
+                aria-label="View fullscreen">View</button>
+            </div>
+            <figcaption class="scans-screen-caption">
+              <p class="scans-screen-host">{{ .Address }}:{{ .Port }}</p>
+              <p class="scans-screen-meta">{{ if .ScanName }}{{ .ScanName }}{{ else }}{{ .ScanID }}{{ end }}</p>
+            </figcaption>
+          </figure>
+          {{ end }}
+        </div>
+        {{ else }}
+        <div class="empty-state">
+          <p>No screenshots yet. Enable screenshots on the next audit from the <a href="/">Command Center</a>.</p>
+        </div>
+        {{ end }}
+      </section>
+
+      <div id="gallery-lightbox" class="lightbox" role="dialog" aria-modal="true"
+        aria-label="Fullscreen evidence image" hidden>
+        <button type="button" class="lightbox-backdrop" aria-label="Close fullscreen preview" data-lightbox-close></button>
+        <figure class="lightbox-figure">
+          <img id="gallery-lightbox-image" alt="Fullscreen evidence image">
+          <button type="button" class="lightbox-close" data-lightbox-close>Close</button>
+        </figure>
+      </div>
     </main>
     {{ template "footer" . }}
     <script src="/static/js/app.js" defer></script>

@@ -59,7 +59,13 @@ type ScansData struct {
 	Scans            []model.Scan
 	ActiveScans      []model.Scan
 	Stats            ScansDashboardStats
+	Screens          []GalleryItem
+	ScreensTotal     int // total gallery frames before the dashboard cap
 }
+
+// scansDashboardScreensLimit caps the compact screenshot grid so the hub
+// stays responsive when many captures exist.
+const scansDashboardScreensLimit = 48
 
 // ScanDetailData renders one scan with all of its results.
 type ScanDetailData struct {
@@ -194,12 +200,23 @@ func (s *Server) handleScans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stats, active := buildScansDashboard(scans)
+	allScreens, err := s.galleryItems(scans, "")
+	if err != nil {
+		s.internalError(w, r, "load screenshots", err)
+		return
+	}
+	screens := allScreens
+	if len(screens) > scansDashboardScreensLimit {
+		screens = screens[:scansDashboardScreensLimit]
+	}
 	s.renderPage(w, "scans", ScansData{
-		Title:       "Scans Dashboard",
-		ActiveNav:   "scans",
-		Scans:       scans,
-		ActiveScans: active,
-		Stats:       stats,
+		Title:        "Scans Dashboard",
+		ActiveNav:    "scans",
+		Scans:        scans,
+		ActiveScans:  active,
+		Stats:        stats,
+		Screens:      screens,
+		ScreensTotal: len(allScreens),
 	})
 }
 

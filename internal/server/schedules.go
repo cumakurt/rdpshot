@@ -88,14 +88,23 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	next, err := nextScheduleRun(sch, now)
+	runAt, err := parseScheduleRunAt(form.Get("run_at"), now)
 	if err != nil {
 		s.writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sch.NextRunAt = &next
-	if formBool(form.Get("run_immediately")) {
+	switch {
+	case formBool(form.Get("run_immediately")):
 		sch.NextRunAt = &now
+	case runAt != nil:
+		sch.NextRunAt = runAt
+	default:
+		next, err := nextScheduleRun(sch, now)
+		if err != nil {
+			s.writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		sch.NextRunAt = &next
 	}
 	if err := s.deps.Store.CreateSchedule(sch); err != nil {
 		s.internalError(w, r, "create schedule", err)
@@ -120,6 +129,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		NotifyWebhook    *string `json:"notify_webhook"`
 		NotifyOnComplete *bool   `json:"notify_on_complete"`
 		NotifyOnCritical *bool   `json:"notify_on_critical"`
+		RunAt            *string `json:"run_at"`
 		RunImmediately   bool    `json:"run_immediately"`
 	}
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
@@ -146,6 +156,9 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			payload.IntervalSeconds = &n
+		}
+		if v := strings.TrimSpace(r.PostForm.Get("run_at")); v != "" {
+			payload.RunAt = &v
 		}
 		payload.RunImmediately = formBool(r.PostForm.Get("run_immediately"))
 	}
@@ -190,11 +203,26 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now().UTC()
-	if payload.RunImmediately {
+	switch {
+	case payload.RunImmediately:
 		sch.NextRunAt = &now
 		sch.Enabled = true
-	} else if next, err := nextScheduleRun(sch, now); err == nil {
-		sch.NextRunAt = &next
+	case payload.RunAt != nil:
+		runAt, err := parseScheduleRunAt(*payload.RunAt, now)
+		if err != nil {
+			s.writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if runAt == nil {
+			s.writeAPIError(w, http.StatusBadRequest, "run_at is required when provided")
+			return
+		}
+		sch.NextRunAt = runAt
+		sch.Enabled = true
+	default:
+		if next, err := nextScheduleRun(sch, now); err == nil {
+			sch.NextRunAt = &next
+		}
 	}
 	sch.UpdatedAt = now
 	if err := s.deps.Store.UpdateSchedule(sch); err != nil {
@@ -335,4 +363,38 @@ func validateScheduleInterval(seconds int) error {
 		return errors.New("interval_seconds must be between " + strconv.Itoa(min) + " and " + strconv.Itoa(max))
 	}
 	return nil
+}
+
+// parseScheduleRunAt accepts RFC3339 / RFC3339Nano or a naive local datetime
+// (YYYY-MM-DDTHH:MM[:SS]) from <input type="datetime-local">. Empty input
+// returns (nil, nil). Past times more than one minute behind now are rejected.
+func parseScheduleRunAt(raw string, now time.Time) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, raw)
+	}
+	if err != nil {
+		normalized := strings.ReplaceAll(raw, " ", "T")
+		for _, layout := range []string{
+			"2006-01-02T15:04:05",
+			"2006-01-02T15:04",
+		} {
+			t, err = time.ParseInLocation(layout, normalized, time.Local)
+			if err == nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		return nil, errors.New("run_at must be an RFC3339 timestamp or YYYY-MM-DDTHH:MM")
+	}
+	t = t.UTC()
+	if t.Before(now.Add(-time.Minute)) {
+		return nil, errors.New("run_at must be in the future")
+	}
+	return &t, nil
 }

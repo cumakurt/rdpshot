@@ -185,6 +185,11 @@ func buildSampleData() sampleData {
 				Creds:     scanA.Progress.Creds + scanB.Progress.Creds,
 				Screens:   scanA.Progress.Screens + scanB.Progress.Screens,
 			},
+			Screens: []GalleryItem{{
+				Screenshot: screen,
+				ScanName:   scanA.Name,
+			}},
+			ScreensTotal: 1,
 		},
 		scanDetail: ScanDetailData{
 			Title:     "Scan " + scanA.Name,

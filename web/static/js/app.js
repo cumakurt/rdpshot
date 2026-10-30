@@ -2016,12 +2016,74 @@
     });
   }
 
+  function pad2(n) {
+    return n < 10 ? '0' + n : String(n);
+  }
+
+  function toDatetimeLocalValue(date) {
+    return date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate()) +
+      'T' + pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+  }
+
   function initScheduleForm() {
     var form = document.getElementById('schedule-form');
     if (!form) {
       return;
     }
     var errorBox = document.getElementById('schedule-form-error');
+    var runAtLocal = form.querySelector('[data-schedule-run-at]');
+    var runAtUTC = form.querySelector('[data-schedule-run-at-utc]');
+    var runNow = form.querySelector('[data-schedule-run-now]');
+
+    if (runAtLocal && !runAtLocal.value) {
+      var soon = new Date();
+      soon.setMinutes(0, 0, 0);
+      soon.setHours(soon.getHours() + 1);
+      runAtLocal.value = toDatetimeLocalValue(soon);
+      runAtLocal.min = toDatetimeLocalValue(new Date());
+    }
+
+    function syncRunAtUTC() {
+      if (!runAtUTC) {
+        return true;
+      }
+      if (runNow && runNow.checked) {
+        runAtUTC.value = '';
+        if (runAtLocal) {
+          runAtLocal.required = false;
+        }
+        return true;
+      }
+      if (runAtLocal) {
+        runAtLocal.required = true;
+      }
+      if (!runAtLocal || !runAtLocal.value) {
+        runAtUTC.value = '';
+        return false;
+      }
+      var parsed = new Date(runAtLocal.value);
+      if (isNaN(parsed.getTime())) {
+        runAtUTC.value = '';
+        return false;
+      }
+      runAtUTC.value = parsed.toISOString();
+      return true;
+    }
+
+    if (runAtLocal) {
+      runAtLocal.addEventListener('change', syncRunAtUTC);
+      runAtLocal.addEventListener('input', syncRunAtUTC);
+    }
+    if (runNow) {
+      runNow.addEventListener('change', function () {
+        if (runAtLocal) {
+          runAtLocal.disabled = !!runNow.checked;
+        }
+        syncRunAtUTC();
+      });
+    }
+    syncRunAtUTC();
+
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
       var targets = form.querySelector('[data-targets-input]');
@@ -2031,6 +2093,13 @@
       if (!hasTargetsText && !hasTargetsFile) {
         if (errorBox) {
           errorBox.textContent = 'Enter targets or load them from a file.';
+          errorBox.classList.remove('hidden');
+        }
+        return;
+      }
+      if (!syncRunAtUTC()) {
+        if (errorBox) {
+          errorBox.textContent = 'Choose a valid first-run date and time.';
           errorBox.classList.remove('hidden');
         }
         return;

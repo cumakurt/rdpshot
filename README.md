@@ -78,7 +78,7 @@ web UI.
 * **Scan compare** — diff hosts and findings between two audits.
 * **Finding triage** — open / confirmed / false positive / remediated workflow.
 * **Engagements & tags** — label scans for client/scope filtering and trends.
-* **Schedules** — interval or five-field cron cadence with optional webhooks.
+* **Schedules** — pick an exact first-run date/time, then interval or five-field cron cadence with optional webhooks.
 * **Evidence pack v2** — ZIP export of HTML/CSV/PDF, hosts/findings/auth_attempts
   JSON, masked credentials, screenshots (no synthetic rdp-open), PACK_README, and
   SHA-256 `manifest.json`.
@@ -93,6 +93,52 @@ web UI.
   PDF with branding fields.
 * **Web UI + REST API** — dashboard, live scan progress (SSE), scan history,
   findings, screenshot gallery, report center, bearer-token protection.
+
+## UI screenshots
+
+Sample captures from a local lab session (authorized RFC1918 targets only).
+Full-size images live under [`docs/screenshots/`](docs/screenshots/).
+
+### Command Center
+
+![Command Center dashboard](docs/screenshots/dashboard.jpg)
+
+### Scans Dashboard
+
+KPI cards, scan inventory filters, and a compact screenshot grid under the
+inventory table.
+
+![Scans Dashboard](docs/screenshots/scans.jpg)
+
+### Scan detail
+
+![Scan detail](docs/screenshots/scan_detail.jpg)
+
+### Visual Session Vault
+
+Real pre-auth login-screen evidence (synthetic detection cards omitted).
+
+![Gallery](docs/screenshots/gallery.jpg)
+
+### Reports hub
+
+![Reports](docs/screenshots/reports.jpg)
+
+### Schedules
+
+Exact first-run date/time picker plus interval or cron cadence.
+
+![Schedules](docs/screenshots/schedules.jpg)
+
+### Estate & engagements
+
+![Estate map](docs/screenshots/estate.jpg)
+
+![Engagements](docs/screenshots/engagements.jpg)
+
+### Compare
+
+![Compare scans](docs/screenshots/compare.jpg)
 
 ## Architecture
 
@@ -330,9 +376,9 @@ footer shows the build version and developer attribution.
 | `GET` | `/api/v1/scans/{id}/report?format=html\|csv\|pdf` | Download a report for one scan |
 | `GET` | `/api/v1/reports/export?format=html\|csv\|pdf&scan={id}\|all` | Download a report for one scan or all scans (embeds screenshots) |
 | `GET` | `/api/v1/schedules` | List recurring schedules |
-| `POST` | `/api/v1/schedules` | Create a recurring schedule |
+| `POST` | `/api/v1/schedules` | Create a schedule (`run_at` datetime, interval/cron) |
 | `GET` | `/api/v1/schedules/{id}` | Schedule detail |
-| `PATCH` | `/api/v1/schedules/{id}` | Enable/disable, retune or run-now |
+| `PATCH` | `/api/v1/schedules/{id}` | Enable/disable, retune, set `run_at`, or run-now |
 | `DELETE` | `/api/v1/schedules/{id}` | Delete a schedule |
 | `GET` | `/api/v1/settings/wordlists` | Current default wordlist paths |
 | `PATCH` | `/api/v1/settings/wordlists` | Update runtime default wordlist paths |
