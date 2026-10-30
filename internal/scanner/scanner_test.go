@@ -484,6 +484,52 @@ func TestRunCredentialAuditStoresMaskedEvents(t *testing.T) {
 	}
 }
 
+// TestRunSkipsAuthWithoutCredSSP ensures TLS-only hosts do not burn candidates
+// and record a skipped auth summary aligned with nla-not-required.
+func TestRunSkipsAuthWithoutCredSSP(t *testing.T) {
+	const addr = "10.0.0.55"
+	auth := &fakeAuthenticator{validUser: "admin", validSecrt: "s3cret"}
+	env := newTestEnv(t, auth, nil)
+	env.setWordlist("users.txt", []string{"admin"})
+	env.setWordlist("passwords.txt", []string{"s3cret"})
+	env.gather.script(addr, rdp.GatherResult{
+		Service: model.ServiceInfo{NegotiatedProtocol: rdp.ProtocolSSL, NLARequired: false},
+	}, nil)
+
+	opts := baseOptions()
+	opts.EnableAuth = true
+	opts.Acknowledged = true
+	opts.MaxAuthFailures = 5
+	opts.UserWordlist = "users.txt"
+	opts.PasswordWordlist = "passwords.txt"
+	scan := env.newScan(t, "auth-skip-tls", opts)
+	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
+
+	if auth.attemptCount() != 0 {
+		t.Fatalf("authenticator attempts = %d, want 0", auth.attemptCount())
+	}
+	hosts, err := env.store.ListHosts(scan.ID)
+	if err != nil {
+		t.Fatalf("hosts: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].Service == nil {
+		t.Fatalf("hosts = %+v", hosts)
+	}
+	if hosts[0].Service.AuthStoppedReason != brute.StopReasonNoCredSSP {
+		t.Fatalf("stopped = %q", hosts[0].Service.AuthStoppedReason)
+	}
+	if hosts[0].Service.Evidence["auth_path"] != "skipped_no_credssp" {
+		t.Fatalf("evidence = %#v", hosts[0].Service.Evidence)
+	}
+	attempts, err := env.store.ListAuthAttempts(scan.ID)
+	if err != nil {
+		t.Fatalf("attempts: %v", err)
+	}
+	if len(attempts) != 1 || attempts[0].Outcome != model.AuthOutcomeSkipped {
+		t.Fatalf("attempts = %+v", attempts)
+	}
+}
+
 // TestRunScreenshotCapture checks that a verified credential yields one stored
 // screenshot and that an unavailable capture tool leaves no row behind while
 // the run still completes.
@@ -796,6 +842,8 @@ func TestRunPrefersLoginScreenCapture(t *testing.T) {
 		},
 	}
 	env.engine.deps.OpenEvidence = screenshot.NewEvidenceGrabber(dir)
+	// HYBRID_EX / NLARequired from gather must still try FreeRDP /sec:tls —
+	// many labs accept forced TLS Winlogon even when preferred nego is HYBRID.
 	env.gather.script(addr, rdp.GatherResult{
 		Service: model.ServiceInfo{
 			NegotiatedProtocol: rdp.ProtocolHybridEx,

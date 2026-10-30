@@ -3,6 +3,11 @@ package reporter
 import (
 	"bytes"
 	"encoding/csv"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -168,8 +173,33 @@ func TestCSV(t *testing.T) {
 	}
 }
 
+func writeTestPNG(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "shot.png")
+	img := image.NewRGBA(image.Rect(0, 0, 32, 24))
+	for y := 0; y < 24; y++ {
+		for x := 0; x < 32; x++ {
+			img.Set(x, y, color.RGBA{R: 40, G: 120, B: 200, A: 255})
+		}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestHTML(t *testing.T) {
 	d := testReportData()
+	d.Screens[0].FilePath = writeTestPNG(t)
+	d.Screens[0].Username = "rdp-login"
 	var buf bytes.Buffer
 	if err := HTML(&buf, d); err != nil {
 		t.Fatalf("HTML() error: %v", err)
@@ -196,10 +226,17 @@ func TestHTML(t *testing.T) {
 	if strings.Contains(out, testRawSecret) {
 		t.Error("html output contains the raw secret")
 	}
+	if !strings.Contains(out, `src="data:image/png;base64,`) {
+		t.Error("html report must embed screenshot as data URI")
+	}
+	if !strings.Contains(out, "Login screen") {
+		t.Error("html report missing login-screen caption")
+	}
 }
 
 func TestPDF(t *testing.T) {
 	d := testReportData()
+	d.Screens[0].FilePath = writeTestPNG(t)
 	var buf bytes.Buffer
 	if err := PDF(&buf, d); err != nil {
 		t.Fatalf("PDF() error: %v", err)
@@ -210,6 +247,16 @@ func TestPDF(t *testing.T) {
 	}
 	if len(out) <= 1000 {
 		t.Errorf("pdf output too small: %d bytes", len(out))
+	}
+}
+
+func TestReportScreensOmitsSyntheticOpenHost(t *testing.T) {
+	got := reportScreens([]model.Screenshot{
+		{Username: "rdp-open", FilePath: "a.png"},
+		{Username: "rdp-login", FilePath: "b.png"},
+	})
+	if len(got) != 1 || got[0].Username != "rdp-login" {
+		t.Fatalf("got %#v", got)
 	}
 }
 

@@ -272,6 +272,10 @@ func (s *Server) parseScheduleForm(form map[string][]string, uploadedTargets []s
 	if err != nil {
 		return model.ScanOptions{}, 0, "", err
 	}
+	maxAuthFailures, err := parseMaxAuthFailures(get("max_auth_failures"))
+	if err != nil {
+		return model.ScanOptions{}, 0, "", err
+	}
 	interval := int((24 * time.Hour).Seconds())
 	if v := strings.TrimSpace(get("interval_seconds")); v != "" {
 		n, err := strconv.Atoi(v)
@@ -301,7 +305,7 @@ func (s *Server) parseScheduleForm(form map[string][]string, uploadedTargets []s
 		EnableVuln:       enableVuln,
 		EnableAuth:       enableAuth,
 		EnableScreens:    enableScreens,
-		MaxAuthFailures:  defaultMaxAuthFailures,
+		MaxAuthFailures:  maxAuthFailures,
 		UserWordlist:     userWordlist,
 		PasswordWordlist: passwordWordlist,
 		Acknowledged:     ack,

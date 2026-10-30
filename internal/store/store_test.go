@@ -267,6 +267,55 @@ func TestDeleteScanRemovesChildren(t *testing.T) {
 	if len(findings) != 0 {
 		t.Fatalf("expected no findings after delete, got %d", len(findings))
 	}
+	hosts, err := s.ListHosts("s-del")
+	if err != nil {
+		t.Fatalf("list hosts: %v", err)
+	}
+	if len(hosts) != 0 {
+		t.Fatalf("expected no hosts after delete, got %d", len(hosts))
+	}
+}
+
+func TestPurgeOrphanHostsAndSummary(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.CreateScan(sampleScan("s-keep")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := s.UpsertHost(model.Host{
+		ScanID: "s-keep", Endpoint: model.Endpoint{Address: "10.0.0.1", Port: 3389},
+		State: "open", UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("host keep: %v", err)
+	}
+	// Simulate an interrupted delete: child rows without a parent scan.
+	if _, err := s.db.Exec(
+		`INSERT INTO hosts (scan_id, address, port, state, service_json, updated_at)
+		 VALUES ('s-gone', '10.0.0.9', 3389, 'open', '{}', ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("orphan host: %v", err)
+	}
+	sum, err := s.Summary("")
+	if err != nil {
+		t.Fatalf("summary before purge: %v", err)
+	}
+	if sum.HostsTotal != 1 || sum.HostsOpen != 1 {
+		t.Fatalf("summary before purge = %+v, want hosts_total/open 1", sum)
+	}
+	n, err := s.PurgeOrphanScanChildren()
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("purged = %d, want >= 1", n)
+	}
+	sum, err = s.Summary("")
+	if err != nil {
+		t.Fatalf("summary after purge: %v", err)
+	}
+	if sum.HostsTotal != 1 {
+		t.Fatalf("summary after purge = %+v", sum)
+	}
 }
 
 func TestRenameScan(t *testing.T) {
@@ -375,6 +424,34 @@ func TestDiffScans(t *testing.T) {
 	}
 	if diff.Summary.FindingsRemoved != 1 {
 		t.Fatalf("findings removed = %d", diff.Summary.FindingsRemoved)
+	}
+	if diff.Summary.FindingsRemediated != 1 {
+		t.Fatalf("findings remediated = %d", diff.Summary.FindingsRemediated)
+	}
+}
+
+func TestAuthAttemptsLifecycle(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.CreateScan(sampleScan("s-auth")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id, err := s.InsertAuthAttempt(model.AuthAttempt{
+		ScanID: "s-auth", HostID: 1, Address: "10.0.0.1", Port: 3389,
+		Username: "admin", Domain: "LAB", Outcome: model.AuthOutcomeInvalid,
+		Detail: "invalid credentials", AttemptedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("expected non-zero id")
+	}
+	got, err := s.ListAuthAttempts("s-auth")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].Username != "admin" || got[0].Outcome != model.AuthOutcomeInvalid {
+		t.Fatalf("got = %+v", got)
 	}
 }
 

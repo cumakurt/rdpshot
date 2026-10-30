@@ -31,6 +31,22 @@
       </p>
     </div>
 
+    <div class="field mt-4" data-lockout-protect-block>
+      <label class="check-row">
+        <input type="checkbox" class="checkbox" checked data-lockout-protect>
+        Limit failed logins per host (lockout protection)
+      </label>
+      <div class="field mt-2" data-lockout-limit-wrap>
+        <label for="{{ .IDPrefix }}-max-auth-failures" class="label">Max failures / host</label>
+        <input id="{{ .IDPrefix }}-max-auth-failures" name="max_auth_failures" type="number"
+          min="0" max="50" value="5" class="input" data-max-auth-failures>
+        <p class="wordlist-hint">
+          Default 5 stops further attempts after that many rejects. Uncheck lockout protection
+          to disable the limit (aggressive full-list testing; may trigger account lockouts).
+        </p>
+      </div>
+    </div>
+
     <div class="mt-4" data-auth-panel="wordlist">
       {{ template "wordlist_picker" . }}
     </div>

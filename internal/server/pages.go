@@ -50,6 +50,7 @@ type ScanDetailData struct {
 	Hosts            []model.Host
 	Findings         []model.Finding
 	Creds            []model.Credential
+	AuthAttempts     []model.AuthAttempt
 	Screens          []model.Screenshot
 	Summary          model.Summary
 	Score            score.ScanScore
@@ -201,22 +202,28 @@ func (s *Server) handleScanDetail(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "load screenshots", err)
 		return
 	}
+	authAttempts, err := s.deps.Store.ListAuthAttempts(id)
+	if err != nil {
+		s.internalError(w, r, "load auth attempts", err)
+		return
+	}
 	summary, err := s.deps.Store.Summary(id)
 	if err != nil {
 		s.internalError(w, r, "load scan summary", err)
 		return
 	}
 	s.renderPage(w, "scan_detail", ScanDetailData{
-		Title:     "Scan " + scan.Name,
-		ActiveNav: "scans",
-		Scan:      scan,
-		Hosts:     openHostsOnly(hosts),
-		Findings:  findings,
-		Creds:     maskCredentials(creds),
-		Screens:   screenshotViews(screens),
-		Summary:   summary,
-		Score:     score.EvaluateScan(scan.ID, hosts, findings),
-		Wordlists: s.wordlistPicker("brute"),
+		Title:        "Scan " + scan.Name,
+		ActiveNav:    "scans",
+		Scan:         scan,
+		Hosts:        openHostsOnly(hosts),
+		Findings:     findings,
+		Creds:        maskCredentials(creds),
+		AuthAttempts: authAttempts,
+		Screens:      screenshotViews(screens),
+		Summary:      summary,
+		Score:        score.EvaluateScan(scan.ID, hosts, findings),
+		Wordlists:    s.wordlistPicker("brute"),
 	})
 }
 

@@ -35,7 +35,7 @@ type Manifest struct {
 // BuildManifest hashes named file contents and returns a self-describing manifest.
 func BuildManifest(scan model.Scan, files map[string][]byte) (Manifest, error) {
 	m := Manifest{
-		Version:    "1",
+		Version:    PackVersion,
 		Generated:  time.Now().UTC(),
 		Engagement: scan.Engagement,
 		ScanID:     scan.ID,

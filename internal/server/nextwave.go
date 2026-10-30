@@ -13,6 +13,7 @@ import (
 	"rdpshot/internal/engagement"
 	"rdpshot/internal/model"
 	"rdpshot/internal/playbook"
+	"rdpshot/internal/score"
 	"rdpshot/internal/store"
 )
 
@@ -205,7 +206,12 @@ func (s *Server) maybeFireAlerts(scan model.Scan) {
 			reuseMax = n
 		}
 	}
-	payloads := alerts.Evaluate(rules, scan, summary, hosts, prior, reuseMax)
+	findings, _ := s.deps.Store.ListFindings(scan.ID)
+	sc := score.EvaluateScan(scan.ID, hosts, findings)
+	payloads := alerts.Evaluate(rules, alerts.Input{
+		Scan: scan, Summary: summary, Hosts: hosts, PriorHosts: prior,
+		Findings: findings, HardeningScore: sc.Score, CredReuseMax: reuseMax,
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := alerts.Deliver(ctx, rules, payloads); err != nil {

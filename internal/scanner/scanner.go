@@ -121,6 +121,7 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 		}
 	}
 
+	ocrSeeds := newOCRUserSeed()
 	var (
 		progress    = &scan.Progress
 		wg          sync.WaitGroup
@@ -160,7 +161,7 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 					continue
 				}
 				atomic.AddInt64(&progress.ActiveJobs, 1)
-				e.processEndpoint(ctx, scan, ep, progress, candidates, screensEnabled)
+				e.processEndpoint(ctx, scan, ep, progress, candidates, screensEnabled, ocrSeeds)
 				atomic.AddInt64(&progress.ActiveJobs, -1)
 				atomic.AddInt64(&progress.Done, 1)
 			}
@@ -213,7 +214,7 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 
 // processEndpoint performs recon and the optional stages for a single endpoint.
 func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model.Endpoint,
-	progress *model.Progress, candidates []model.Credential, screensEnabled bool) {
+	progress *model.Progress, candidates []model.Credential, screensEnabled bool, ocrSeeds *ocrUserSeed) {
 
 	logger := e.deps.Logger.With("scan_id", scan.ID, "target", ep.Key())
 	host := model.Host{
@@ -254,12 +255,19 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 				svc.Evidence["udp_3389"] = disc.UDPEvidence
 			}
 		}
-		if svc.NLARequired && kerberos.Available() {
-			svc.KerberosOffered = true
-			if svc.Evidence == nil {
-				svc.Evidence = map[string]string{}
+		if svc.NLARequired {
+			kst := kerberos.Probe()
+			if kst.Available {
+				svc.KerberosOffered = true
+				if svc.Evidence == nil {
+					svc.Evidence = map[string]string{}
+				}
+				svc.Evidence["kerberos"] = kerberos.SummaryLine(kst)
+				svc.Evidence["kerberos_kind"] = kst.Kind
+				if kst.Path != "" {
+					svc.Evidence["kerberos_source"] = kst.Path
+				}
 			}
-			svc.Evidence["kerberos"] = "client offered Kerberos mech (ccache/keytab present)"
 		}
 		host.Service = &svc
 		atomic.AddInt64(&progress.Open, 1)
@@ -303,19 +311,88 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 		}
 	}
 
+	nlaRequired := host.Service != nil && host.Service.NLARequired
 	if len(candidates) == 0 {
-		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger)
+		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger, ocrSeeds)
 		return
 	}
-	cred, ok := e.auditCredentials(ctx, scan, ep, hostID, candidates, progress, logger)
+	if !nlaRequired {
+		// CredSSP password audits require HYBRID/NLA. Capture Winlogon tiles
+		// for OCR seeding, record the skip, and align with nla-not-required.
+		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger, ocrSeeds)
+		e.recordAuthSkipped(scan, ep, hostID, logger)
+		return
+	}
+	hostCandidates := candidates
+	if ocrSeeds != nil {
+		if seeded := ocrSeeds.List(); len(seeded) > 0 {
+			hostCandidates = brute.PrependOCRUsers(candidates, seeded, scan.Options.AuthDomain)
+			if len(hostCandidates) > len(candidates) {
+				e.log(scan.ID, "info", fmt.Sprintf(
+					"OCR wordlist seed: prepended %d username(s) for %s",
+					(len(hostCandidates)-len(candidates))/max(passwordCardinality(candidates), 1), ep.Key()))
+			}
+		}
+	}
+	cred, ok := e.auditCredentials(ctx, scan, ep, hostID, hostCandidates, progress, logger)
 	if ok && screensEnabled {
 		e.captureScreenshot(ctx, scan, ep, hostID, cred, progress, logger)
 		return
 	}
 	// Failed or skipped login: try a real pre-auth Winlogon frame only.
 	if !ok {
-		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger)
+		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger, ocrSeeds)
 	}
+}
+
+func passwordCardinality(candidates []model.Credential) int {
+	seen := make(map[string]struct{}, len(candidates))
+	for _, c := range candidates {
+		seen[c.Secret] = struct{}{}
+	}
+	return len(seen)
+}
+
+// ocrUserSeed collects login-screen usernames for scan-wide wordlist prepend.
+type ocrUserSeed struct {
+	mu    sync.Mutex
+	users []string
+	seen  map[string]struct{}
+}
+
+func newOCRUserSeed() *ocrUserSeed {
+	return &ocrUserSeed{seen: make(map[string]struct{})}
+}
+
+func (s *ocrUserSeed) Add(users []string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range users {
+		u = strings.TrimSpace(u)
+		if u == "" || strings.EqualFold(u, "Other user") {
+			continue
+		}
+		key := strings.ToLower(u)
+		if _, ok := s.seen[key]; ok {
+			continue
+		}
+		s.seen[key] = struct{}{}
+		s.users = append(s.users, u)
+	}
+}
+
+func (s *ocrUserSeed) List() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.users))
+	copy(out, s.users)
+	return out
 }
 
 // auditCredentials runs the fail-safe credential audit for one endpoint and
@@ -329,6 +406,17 @@ func (e *Engine) auditCredentials(ctx context.Context, scan *model.Scan, ep mode
 	hooks := brute.Hooks{
 		OnSuccess: func(cred model.Credential) {
 			e.log(scan.ID, "info", fmt.Sprintf("verified credential on %s for user %q", ep.Key(), cred.Username))
+		},
+		OnFailure: func(cred model.Credential, err error) {
+			e.log(scan.ID, "info", fmt.Sprintf("rejected credential on %s for user %q", ep.Key(), cred.Username))
+			_ = err
+		},
+		OnAttempt: func(cred model.Credential, outcome, detail string) {
+			e.persistAuthAttempt(model.AuthAttempt{
+				ScanID: scan.ID, HostID: hostID, Address: ep.Address, Port: ep.Port,
+				Username: cred.Username, Domain: cred.Domain, Outcome: outcome, Detail: detail,
+				AttemptedAt: time.Now().UTC(),
+			}, logger)
 		},
 	}
 	engine := brute.New(e.deps.Authenticator, brute.Options{
@@ -345,6 +433,10 @@ func (e *Engine) auditCredentials(ctx context.Context, scan *model.Scan, ep mode
 	if res.LockedOut {
 		e.log(scan.ID, "warn", fmt.Sprintf("account lockout reported by %s; audit stopped for this host", ep.Key()))
 	}
+	e.persistAuthSummary(hostID, res.Attempts, res.Failures, res.StoppedReason, logger)
+	e.log(scan.ID, "info", fmt.Sprintf(
+		"credential audit on %s: attempts=%d failures=%d stopped=%s",
+		ep.Key(), res.Attempts, res.Failures, res.StoppedReason))
 	for _, cred := range res.Credentials {
 		id, err := e.deps.Store.InsertCredential(cred)
 		if err != nil {
@@ -359,6 +451,58 @@ func (e *Engine) auditCredentials(ctx context.Context, scan *model.Scan, ep mode
 		return res.Credentials[0], true
 	}
 	return model.Credential{}, false
+}
+
+func (e *Engine) recordAuthSkipped(scan *model.Scan, ep model.Endpoint, hostID int64, logger *slog.Logger) {
+	reason := brute.StopReasonNoCredSSP
+	e.persistAuthSummary(hostID, 0, 0, reason, logger)
+	e.persistAuthAttempt(model.AuthAttempt{
+		ScanID: scan.ID, HostID: hostID, Address: ep.Address, Port: ep.Port,
+		Username: "", Outcome: model.AuthOutcomeSkipped, Detail: reason,
+		AttemptedAt: time.Now().UTC(),
+	}, logger)
+	e.log(scan.ID, "info", fmt.Sprintf("credential audit skipped for %s: %s", ep.Key(), reason))
+}
+
+func (e *Engine) persistAuthSummary(hostID int64, attempts, failures int, reason string, logger *slog.Logger) {
+	if hostID == 0 || e.deps.Store == nil {
+		return
+	}
+	host, err := e.deps.Store.GetHost(hostID)
+	if err != nil {
+		logger.Warn("load host for auth summary", "error", err.Error())
+		return
+	}
+	if host.Service == nil {
+		host.Service = &model.ServiceInfo{}
+	}
+	if host.Service.Evidence == nil {
+		host.Service.Evidence = map[string]string{}
+	}
+	host.Service.AuthAttempts = attempts
+	host.Service.AuthFailures = failures
+	host.Service.AuthStoppedReason = reason
+	host.Service.Evidence["auth_attempts"] = fmt.Sprintf("%d", attempts)
+	host.Service.Evidence["auth_failures"] = fmt.Sprintf("%d", failures)
+	host.Service.Evidence["auth_stopped_reason"] = reason
+	if reason == brute.StopReasonNoCredSSP {
+		host.Service.Evidence["auth_path"] = "skipped_no_credssp"
+	} else if attempts > 0 {
+		host.Service.Evidence["auth_path"] = "credssp"
+	}
+	host.UpdatedAt = time.Now().UTC()
+	if _, err := e.deps.Store.UpsertHost(host); err != nil {
+		logger.Warn("persist auth summary", "error", err.Error())
+	}
+}
+
+func (e *Engine) persistAuthAttempt(a model.AuthAttempt, logger *slog.Logger) {
+	if e.deps.Store == nil {
+		return
+	}
+	if _, err := e.deps.Store.InsertAuthAttempt(a); err != nil {
+		logger.Warn("persist auth attempt", "error", err.Error())
+	}
 }
 
 func (e *Engine) recordSmartCardFinding(scan *model.Scan, ep model.Endpoint, hostID int64, progress *model.Progress) {
@@ -388,11 +532,12 @@ func (e *Engine) recordSmartCardFinding(scan *model.Scan, ep model.Endpoint, hos
 }
 
 // captureOpenHostEvidence stores a live TLS login-screen capture when Winlogon
-// is reachable without credentials. Synthetic detection-evidence PNGs are not
-// written — if FreeRDP cannot show a real frame, the gallery stays empty for
-// that host (NLA/HYBRID blocked endpoints simply have no screenshot).
+// is reachable without credentials. Negotiation may report HYBRID/NLA required
+// while FreeRDP /sec:tls can still reach the pre-auth UI on some hosts, so this
+// path always tries the grabber and lets it fail fast when Winlogon is blocked.
+// Synthetic detection-evidence PNGs are not written.
 func (e *Engine) captureOpenHostEvidence(ctx context.Context, scan *model.Scan, ep model.Endpoint,
-	hostID int64, svc *model.ServiceInfo, progress *model.Progress, logger *slog.Logger) {
+	hostID int64, svc *model.ServiceInfo, progress *model.Progress, logger *slog.Logger, ocrSeeds *ocrUserSeed) {
 
 	_ = svc
 	if e.deps.LoginScreen == nil || e.deps.LoginScreen.Available() != nil {
@@ -406,20 +551,21 @@ func (e *Engine) captureOpenHostEvidence(ctx context.Context, scan *model.Scan, 
 		return
 	}
 	e.persistScreenshot(scan, hostID, shot, progress, logger)
-	e.recordLoginScreenUsers(ctx, scan, ep, hostID, shot.FilePath, progress, logger)
+	e.recordLoginScreenUsers(ctx, scan, ep, hostID, shot.FilePath, progress, logger, ocrSeeds)
 }
 
 // recordLoginScreenUsers OCRs the Winlogon tile list and persists usernames on
 // the host service info plus an informational finding when any are found.
 func (e *Engine) recordLoginScreenUsers(ctx context.Context, scan *model.Scan, ep model.Endpoint,
-	hostID int64, imagePath string, progress *model.Progress, logger *slog.Logger) {
+	hostID int64, imagePath string, progress *model.Progress, logger *slog.Logger, ocrSeeds *ocrUserSeed) {
 
-	users, err := screenshot.ExtractLoginUsersOCR(ctx, imagePath)
+	ocr, err := screenshot.ExtractLoginUsersOCR(ctx, imagePath)
 	if err != nil {
 		logger.Warn("login-screen OCR failed", "error", err.Error())
 		e.log(scan.ID, "warn", fmt.Sprintf("login-screen OCR failed for %s: %v", ep.Key(), err))
-		users = nil
+		ocr = screenshot.LoginUsersResult{}
 	}
+	users := ocr.Users
 	host, err := e.deps.Store.GetHost(hostID)
 	if err != nil {
 		logger.Warn("load host for login users", "error", err.Error())
@@ -432,9 +578,11 @@ func (e *Engine) recordLoginScreenUsers(ctx context.Context, scan *model.Scan, e
 		host.Service.Evidence = map[string]string{}
 	}
 	host.Service.Evidence["login_screen"] = "ssl-tls"
+	host.Service.Evidence["login_users_quality"] = fmt.Sprintf("%.2f", ocr.Quality)
 	if len(users) > 0 {
 		host.Service.LoginUsers = users
 		host.Service.Evidence["login_users"] = strings.Join(users, ", ")
+		ocrSeeds.Add(users)
 	}
 	host.UpdatedAt = time.Now().UTC()
 	if _, err := e.deps.Store.UpsertHost(host); err != nil {

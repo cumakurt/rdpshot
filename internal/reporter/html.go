@@ -88,10 +88,13 @@ type credentialView struct {
 }
 
 type screenshotView struct {
-	FilePath   string
-	HostPort   string
-	Username   string
-	CapturedAt string
+	FilePath     string
+	HostPort     string
+	Username     string
+	Label        string
+	CapturedAt   string
+	ImageDataURI template.URL
+	HasImage     bool
 }
 
 // HTML writes a complete, self-contained (inline CSS, no external requests) HTML report.
@@ -157,23 +160,34 @@ func buildHTMLView(d Data) htmlView {
 			VerifiedAt: orDash(formatTime(masked.VerifiedAt)),
 		})
 	}
-	for _, s := range d.Screens {
-		view.Screenshots = append(view.Screenshots, screenshotView{
+	for _, s := range reportScreens(d.Screens) {
+		row := screenshotView{
 			FilePath:   orDash(s.FilePath),
 			HostPort:   endpointText(s.Address, s.Port),
 			Username:   orDash(s.Username),
+			Label:      screenshotLabel(s.Username),
 			CapturedAt: orDash(formatTime(s.CapturedAt)),
-		})
+		}
+		if uri, err := loadScreenshotDataURI(s.FilePath); err == nil {
+			row.ImageDataURI = template.URL(uri)
+			row.HasImage = true
+		}
+		view.Screenshots = append(view.Screenshots, row)
 	}
 	return view
 }
 
 // summaryCards builds the executive summary counters.
 func summaryCards(d Data) []cardView {
+	extra := computeExecutiveExtras(d)
 	cards := []cardView{
 		{Label: "Hardening Score", Value: int64(d.HardeningScore)},
 		{Label: "Hosts Total", Value: d.Summary.HostsTotal},
 		{Label: "Hosts Open", Value: d.Summary.HostsOpen},
+		{Label: "NLA Coverage %", Value: extra.NLACoveragePct},
+		{Label: "Open Findings", Value: extra.OpenVulnerable},
+		{Label: "Hosts Auth Audited", Value: extra.HostsAudited},
+		{Label: "Auth Skipped (no CredSSP)", Value: extra.AuthSkippedNoNLA},
 	}
 	for _, bucket := range severityBuckets(d) {
 		cards = append(cards, cardView{
@@ -184,7 +198,7 @@ func summaryCards(d Data) []cardView {
 	}
 	cards = append(cards,
 		cardView{Label: "Credentials Found", Value: d.Summary.CredsTotal},
-		cardView{Label: "Screenshots", Value: d.Summary.ScreensTotal},
+		cardView{Label: "Screenshots", Value: int64(len(reportScreens(d.Screens)))},
 	)
 	return cards
 }

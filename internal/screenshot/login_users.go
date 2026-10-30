@@ -19,15 +19,24 @@ const (
 	maxLoginUsers = 8
 	// Winlogon account tiles sit in the lower-left; a full-height left strip
 	// is mostly wallpaper and defeats tesseract.
-	loginTileLeftFrac   = 0.34
-	loginTileTopFrac    = 0.55
-	loginTileOCRScale   = 3
+	loginTileLeftFrac = 0.34
+	loginTileTopFrac  = 0.55
+	loginTileOCRScale = 3
+	// minLoginUsersQuality drops OCR results that are mostly junk crumbs.
+	minLoginUsersQuality = 0.35
 )
+
+// LoginUsersResult is the OCR extraction outcome with a simple quality score.
+type LoginUsersResult struct {
+	Users         []string
+	Quality       float64
+	RawTokenCount int
+}
 
 // ExtractLoginUsersOCR runs tesseract on a preprocessed bottom-left crop of a
 // login-screen PNG (Winlogon account tiles) and returns plausible usernames.
-// Missing tesseract yields (nil, nil).
-func ExtractLoginUsersOCR(ctx context.Context, imagePath string) ([]string, error) {
+// Missing tesseract yields a zero result with a nil error.
+func ExtractLoginUsersOCR(ctx context.Context, imagePath string) (LoginUsersResult, error) {
 	return extractLoginUsersOCR(ctx, imagePath, exec.LookPath, runTesseract)
 }
 
@@ -51,9 +60,9 @@ func runTesseract(ctx context.Context, imagePath string) (string, error) {
 	return stdout.String(), nil
 }
 
-func extractLoginUsersOCR(ctx context.Context, imagePath string, lookPath lookPathFunc, run tesseractFunc) ([]string, error) {
+func extractLoginUsersOCR(ctx context.Context, imagePath string, lookPath lookPathFunc, run tesseractFunc) (LoginUsersResult, error) {
 	if _, err := lookPath("tesseract"); err != nil {
-		return nil, nil
+		return LoginUsersResult{}, nil
 	}
 	ocrPath := imagePath
 	prepared, err := prepareLoginUsersOCRImage(imagePath)
@@ -63,9 +72,9 @@ func extractLoginUsersOCR(ctx context.Context, imagePath string, lookPath lookPa
 	}
 	text, err := run(ctx, ocrPath)
 	if err != nil {
-		return nil, err
+		return LoginUsersResult{}, err
 	}
-	return ParseLoginUsersOCR(text), nil
+	return ApplyLoginUsersQualityGate(ParseLoginUsersOCRResult(text)), nil
 }
 
 // looksLikeHostname rejects machine / domain fragments OCR'd from "Sign in to:".
@@ -276,8 +285,14 @@ var leadingOCRNoise = regexp.MustCompile(`^[\d\)\(\]\[|>.~*\-—–]+`)
 
 // ParseLoginUsersOCR extracts account-like labels from tesseract stdout.
 func ParseLoginUsersOCR(text string) []string {
+	return ParseLoginUsersOCRResult(text).Users
+}
+
+// ParseLoginUsersOCRResult extracts users and a quality score from OCR text.
+func ParseLoginUsersOCRResult(text string) LoginUsersResult {
 	seen := map[string]struct{}{}
 	var out []string
+	rawTokens := 0
 	for _, rawLine := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" {
@@ -294,12 +309,14 @@ func ParseLoginUsersOCR(text string) []string {
 		}
 		compact := strings.Join(strings.Fields(line), " ")
 		if name, ok := normalizeAccountLabel(compact); ok {
+			rawTokens++
 			addLoginUser(&out, seen, name)
 			continue
 		}
 		var cands []string
 		for _, field := range strings.Fields(line) {
 			field = strings.Trim(field, ".,;:|[](){}<>\"'`*~")
+			rawTokens += countOCRCandidateAttempts(field)
 			if name, ok := normalizeAccountLabel(field); ok {
 				cands = append(cands, name)
 			}
@@ -311,7 +328,51 @@ func ParseLoginUsersOCR(text string) []string {
 			break
 		}
 	}
-	return finalizeLoginUsers(out)
+	users := finalizeLoginUsers(out)
+	accepted := 0
+	for _, u := range users {
+		if u != "Other user" {
+			accepted++
+		}
+	}
+	quality := 0.0
+	if rawTokens > 0 {
+		quality = float64(accepted) / float64(rawTokens)
+	} else if accepted > 0 {
+		quality = 1.0
+	}
+	if quality > 1 {
+		quality = 1
+	}
+	return LoginUsersResult{Users: users, Quality: quality, RawTokenCount: rawTokens}
+}
+
+// ApplyLoginUsersQualityGate clears users when the OCR score is too low.
+func ApplyLoginUsersQualityGate(res LoginUsersResult) LoginUsersResult {
+	if res.Quality < minLoginUsersQuality {
+		res.Users = nil
+	}
+	return res
+}
+
+func countOCRCandidateAttempts(field string) int {
+	if field == "" {
+		return 0
+	}
+	lower := strings.ToLower(strings.Trim(field, ".,;:|[](){}<>\"'`*~"))
+	if lower == "" {
+		return 0
+	}
+	if _, junk := winlogonJunk[lower]; junk {
+		return 1
+	}
+	if looksLikeHostname(lower) || looksLikeOCRCrumb(lower) {
+		return 1
+	}
+	if loginUserToken.MatchString(lower) || domainUser.MatchString(lower) {
+		return 1
+	}
+	return 0
 }
 
 // preferAccountCandidates drops short lowercase OCR crumbs when a stronger

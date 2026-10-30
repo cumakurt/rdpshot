@@ -69,10 +69,12 @@ func main() {
 				} else if _, err := os.Stat(path); err != nil {
 					fmt.Fprintf(os.Stderr, "missing shot %s: %v\n", path, err)
 				} else {
-					users, err = screenshot.ExtractLoginUsersOCR(ctx, path)
+					ocr, err := screenshot.ExtractLoginUsersOCR(ctx, path)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "OCR %s: %v\n", path, err)
 						users = nil
+					} else {
+						users = ocr.Users
 					}
 				}
 			}

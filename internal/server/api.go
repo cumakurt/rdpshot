@@ -124,6 +124,11 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	maxAuthFailures, err := parseMaxAuthFailures(form.Get("max_auth_failures"))
+	if err != nil {
+		s.writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	res, err := target.Resolve(r.Context(), target.Options{
 		Specs:      specs,
 		Ports:      ports,
@@ -184,7 +189,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 			EnableAuth:       enableAuth,
 			EnableScreens:    enableScreens,
 			EnableDiscovery:  enableDiscovery,
-			MaxAuthFailures:  defaultMaxAuthFailures,
+			MaxAuthFailures:  maxAuthFailures,
 			UserWordlist:     userWordlist,
 			PasswordWordlist: passwordWordlist,
 			BaseScanID:       baseScanID,
@@ -323,6 +328,9 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 		scan.Status = model.ScanCancelled
 		_ = s.deps.Store.UpdateScan(scan)
 	}
+	// Wait for the in-process engine to drop the run so UpsertHost cannot
+	// recreate orphan host rows after DeleteScan commits.
+	s.waitScanStopped(scan.ID, 8*time.Second)
 	screens, err := s.deps.Store.ListScreenshots(scan.ID)
 	if err != nil {
 		s.internalError(w, r, "load scan screenshots", err)
@@ -331,6 +339,9 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	if err := s.deps.Store.DeleteScan(scan.ID); err != nil {
 		s.internalError(w, r, "delete scan", err)
 		return
+	}
+	if _, err := s.deps.Store.PurgeOrphanScanChildren(); err != nil {
+		s.deps.Logger.Warn("purge orphan scan children", "error", err.Error())
 	}
 	paths := make([]string, 0, len(screens))
 	for _, screen := range screens {
@@ -585,14 +596,15 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseMaxAuthFailures validates the per-host attempt limit.
+// Empty → product default (5). 0 disables lockout protection (unlimited).
 func parseMaxAuthFailures(value string) (int, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return defaultMaxAuthFailures, nil
 	}
 	n, err := strconv.Atoi(value)
-	if err != nil || n < 1 || n > maxAuthFailureLimit {
-		return 0, fmt.Errorf("invalid max_auth_failures %q: must be between 1 and %d", value, maxAuthFailureLimit)
+	if err != nil || n < 0 || n > maxAuthFailureLimit {
+		return 0, fmt.Errorf("invalid max_auth_failures %q: must be between 0 and %d (0 disables the per-host fail-safe)", value, maxAuthFailureLimit)
 	}
 	return n, nil
 }

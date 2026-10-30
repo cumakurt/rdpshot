@@ -114,6 +114,57 @@ func BuildSingleCandidate(username, domain, password string) ([]model.Credential
 	}}, nil
 }
 
+// PrependOCRUsers inserts OCR-discovered usernames at the front of an existing
+// candidate list, crossing each new user with the distinct passwords already
+// present. Secrets are copied from existing candidates only; nothing is logged.
+func PrependOCRUsers(candidates []model.Credential, usernames []string, defaultDomain string) []model.Credential {
+	if len(candidates) == 0 || len(usernames) == 0 {
+		return candidates
+	}
+	existingUsers := make(map[string]struct{}, len(candidates))
+	var passwords []string
+	seenPass := make(map[string]struct{})
+	for _, c := range candidates {
+		key := strings.ToLower(c.Domain) + `\` + strings.ToLower(c.Username)
+		existingUsers[key] = struct{}{}
+		if _, ok := seenPass[c.Secret]; ok {
+			continue
+		}
+		seenPass[c.Secret] = struct{}{}
+		passwords = append(passwords, c.Secret)
+	}
+	if len(passwords) == 0 {
+		return candidates
+	}
+	var prepended []model.Credential
+	for _, raw := range usernames {
+		user, dom := ParseUserDomain(raw, defaultDomain)
+		if user == "" || strings.EqualFold(user, "Other user") {
+			continue
+		}
+		key := strings.ToLower(dom) + `\` + strings.ToLower(user)
+		if _, ok := existingUsers[key]; ok {
+			continue
+		}
+		existingUsers[key] = struct{}{}
+		for _, password := range passwords {
+			prepended = append(prepended, model.Credential{
+				Username: user,
+				Domain:   dom,
+				Secret:   password,
+				Method:   model.CredMethodPassword,
+			})
+		}
+	}
+	if len(prepended) == 0 {
+		return candidates
+	}
+	out := make([]model.Credential, 0, len(prepended)+len(candidates))
+	out = append(out, prepended...)
+	out = append(out, candidates...)
+	return out
+}
+
 // BuildPTHCandidate builds one pass-the-hash credential. nthash must parse as
 // a 32-hex NT hash or LM:NT pair; the stored secret is the normalized NT hex.
 func BuildPTHCandidate(username, domain, nthash string) ([]model.Credential, error) {

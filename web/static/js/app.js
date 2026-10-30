@@ -1738,6 +1738,33 @@
     });
   }
 
+  function syncLockoutProtect(root) {
+    var protect = root.querySelector('[data-lockout-protect]');
+    var limit = root.querySelector('[data-max-auth-failures]');
+    var wrap = root.querySelector('[data-lockout-limit-wrap]');
+    if (!protect || !limit) {
+      return;
+    }
+    var on = protect.checked;
+    if (wrap) {
+      wrap.hidden = !on;
+      wrap.classList.toggle('hidden', !on);
+    }
+    limit.disabled = !on;
+    if (!on) {
+      if (!limit.dataset.prevLimit) {
+        limit.dataset.prevLimit = limit.value && limit.value !== '0' ? limit.value : '5';
+      }
+      limit.value = '0';
+      limit.min = '0';
+    } else {
+      limit.min = '1';
+      if (limit.value === '0') {
+        limit.value = limit.dataset.prevLimit || '5';
+      }
+    }
+  }
+
   function syncAuthAdvanced(root) {
     if (!root) {
       return;
@@ -1756,6 +1783,9 @@
     });
     Array.prototype.forEach.call(root.querySelectorAll('[data-auth-domain]'), function (field) {
       field.disabled = !authEnabled;
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('[data-lockout-protect]'), function (box) {
+      box.disabled = !authEnabled;
     });
     Array.prototype.forEach.call(root.querySelectorAll('[data-auth-panel]'), function (panel) {
       var key = panel.getAttribute('data-auth-panel');
@@ -1782,6 +1812,13 @@
       );
       field.disabled = !active;
     });
+    syncLockoutProtect(root);
+    if (!authEnabled) {
+      var limit = root.querySelector('[data-max-auth-failures]');
+      if (limit) {
+        limit.disabled = true;
+      }
+    }
   }
 
   function initAuthAdvanced() {
@@ -1805,6 +1842,22 @@
       if (enableAuth) {
         enableAuth.addEventListener('change', function () {
           syncAuthAdvanced(root);
+        });
+      }
+      var protect = root.querySelector('[data-lockout-protect]');
+      if (protect) {
+        protect.addEventListener('change', function () {
+          syncLockoutProtect(root);
+        });
+      }
+      if (form) {
+        form.addEventListener('submit', function () {
+          var box = root.querySelector('[data-lockout-protect]');
+          var limit = root.querySelector('[data-max-auth-failures]');
+          if (box && limit && !box.checked) {
+            limit.disabled = false;
+            limit.value = '0';
+          }
         });
       }
     });
@@ -2280,16 +2333,23 @@
     var status = document.getElementById('alerts-status');
     var enabled = document.getElementById('alert-enabled');
     var critical = document.getElementById('alert-critical');
+    var high = document.getElementById('alert-high');
     var nla = document.getElementById('alert-nla');
+    var openCrit = document.getElementById('alert-open-crit');
     fetch('/api/v1/settings/alerts')
       .then(function (resp) { return resp.json(); })
       .then(function (rules) {
         if (!rules) return;
         form.webhook_url.value = rules.webhook_url || '';
         form.on_cred_reuse_min.value = rules.on_cred_reuse_min || 0;
+        if (form.min_hardening_score) {
+          form.min_hardening_score.value = rules.min_hardening_score || 0;
+        }
         if (enabled) enabled.checked = !!rules.enabled;
         if (critical) critical.checked = !!rules.on_critical;
+        if (high) high.checked = !!rules.on_high;
         if (nla) nla.checked = !!rules.on_nla_regressed;
+        if (openCrit) openCrit.checked = !!rules.on_open_triage_critical;
       })
       .catch(function () { /* optional */ });
     form.addEventListener('submit', function (ev) {
@@ -2301,8 +2361,11 @@
           webhook_url: form.webhook_url.value,
           enabled: enabled ? enabled.checked : false,
           on_critical: critical ? critical.checked : false,
+          on_high: high ? high.checked : false,
           on_nla_regressed: nla ? nla.checked : false,
-          on_cred_reuse_min: Number(form.on_cred_reuse_min.value || 0)
+          on_open_triage_critical: openCrit ? openCrit.checked : false,
+          on_cred_reuse_min: Number(form.on_cred_reuse_min.value || 0),
+          min_hardening_score: Number(form.min_hardening_score ? form.min_hardening_score.value || 0 : 0)
         })
       })
         .then(function (resp) {

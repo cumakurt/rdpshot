@@ -204,3 +204,27 @@ func TestFindingsCarryStableIdentifiers(t *testing.T) {
 		t.Fatal("expected the informational exposure finding")
 	}
 }
+
+func TestKerberosAndSmartCardCapabilityNotes(t *testing.T) {
+	svc := &model.ServiceInfo{
+		NegotiatedProtocol: rdp.ProtocolHybrid,
+		NLARequired:        true,
+		KerberosOffered:    true,
+		SmartCardRequired:  true,
+		Evidence: map[string]string{
+			"kerberos": "client offered Kerberos mech; kind=ccache",
+		},
+	}
+	findings := Evaluate(model.Endpoint{Address: "10.0.0.9", Port: 3389}, Input{Service: svc})
+	k := findingByID(t, findings, "nla-kerberos-offered")
+	if k.Status != model.FindingNotVulnerable {
+		t.Fatalf("kerberos = %+v", k)
+	}
+	if !strings.Contains(k.Evidence, "Kerberos") {
+		t.Fatalf("kerberos evidence = %q", k.Evidence)
+	}
+	sc := findingByID(t, findings, "nla-smartcard-required")
+	if sc.Status != model.FindingNotVulnerable {
+		t.Fatalf("smartcard = %+v", sc)
+	}
+}

@@ -29,6 +29,9 @@ func (a BruteAdapter) Authenticate(ctx context.Context, ep model.Endpoint, cred 
 		return fmt.Errorf("%w: %v", brute.ErrInvalidCredential, err)
 	case errors.Is(err, ErrAccountLocked):
 		return fmt.Errorf("%w: %v", brute.ErrLockedOut, err)
+	case errors.Is(err, ErrNLARequired):
+		// TLS/RDP-only endpoints cannot complete a CredSSP password audit.
+		return fmt.Errorf("%w: %v", brute.ErrCredSSPUnavailable, err)
 	default:
 		return err
 	}

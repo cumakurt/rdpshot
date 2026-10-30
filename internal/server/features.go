@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -124,40 +124,9 @@ func (s *Server) handleEvidencePack(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "list screenshots for pack", err)
 		return
 	}
-
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-
-	writeString := func(name, body string) error {
-		w, err := zw.Create(name)
-		if err != nil {
-			return err
-		}
-		_, err = io.WriteString(w, body)
-		return err
-	}
-	writeBytes := func(name string, body []byte) error {
-		w, err := zw.Create(name)
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(body)
-		return err
-	}
-
-	packFiles := map[string][]byte{}
-
-	meta, _ := json.MarshalIndent(map[string]any{
-		"scan":      scan,
-		"generated": time.Now().UTC(),
-		"branding":  data.Branding,
-		"tool":      data.ToolVersion,
-		"score":     data.HardeningScore,
-		"grade":     data.HardeningGrade,
-	}, "", "  ")
-	packFiles["meta.json"] = meta
-	if err := writeBytes("meta.json", meta); err != nil {
-		s.internalError(w, r, "write meta", err)
+	authAttempts, err := s.deps.Store.ListAuthAttempts(scan.ID)
+	if err != nil {
+		s.internalError(w, r, "list auth attempts for pack", err)
 		return
 	}
 
@@ -166,44 +135,78 @@ func (s *Server) handleEvidencePack(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "render html pack", err)
 		return
 	}
-	packFiles["report.html"] = htmlBuf.Bytes()
-	_ = writeBytes("report.html", htmlBuf.Bytes())
-
 	var csvBuf bytes.Buffer
 	if err := reporter.CSV(&csvBuf, data); err != nil {
 		s.internalError(w, r, "render csv pack", err)
 		return
 	}
-	packFiles["findings.csv"] = csvBuf.Bytes()
-	_ = writeBytes("findings.csv", csvBuf.Bytes())
-
 	var pdfBuf bytes.Buffer
-	if err := reporter.PDF(&pdfBuf, data); err == nil {
-		packFiles["report.pdf"] = pdfBuf.Bytes()
-		_ = writeBytes("report.pdf", pdfBuf.Bytes())
-	}
+	_ = reporter.PDF(&pdfBuf, data)
 
-	for i, shot := range shots {
+	shotFiles := map[string][]byte{}
+	for i, shot := range engagement.FilterPackScreenshots(shots) {
 		path := shot.FilePath
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			_ = writeString(fmt.Sprintf("screenshots/missing-%d.txt", i+1), err.Error())
+			shotFiles[fmt.Sprintf("screenshots/missing-%d.txt", i+1)] = []byte(err.Error())
 			continue
 		}
 		name := filepath.Base(path)
 		if name == "." || name == "/" || name == "" {
 			name = fmt.Sprintf("shot-%d.png", i+1)
 		}
-		packFiles["screenshots/"+name] = raw
-		_ = writeBytes("screenshots/"+name, raw)
+		shotFiles["screenshots/"+name] = raw
+	}
+
+	masked := make([]model.Credential, 0, len(data.Credentials))
+	for _, c := range data.Credentials {
+		masked = append(masked, c.Masked())
+	}
+
+	packFiles, err := engagement.AssemblePack(engagement.PackInput{
+		Scan:           scan,
+		ToolVersion:    data.ToolVersion,
+		HardeningScore: data.HardeningScore,
+		HardeningGrade: data.HardeningGrade,
+		Branding:       data.Branding,
+		Hosts:          data.Hosts,
+		Findings:       data.Findings,
+		Credentials:    masked,
+		AuthAttempts:   authAttempts,
+		ReportHTML:     htmlBuf.Bytes(),
+		FindingsCSV:    csvBuf.Bytes(),
+		ReportPDF:      pdfBuf.Bytes(),
+		Screenshots:    shotFiles,
+	})
+	if err != nil {
+		s.internalError(w, r, "assemble evidence pack", err)
+		return
 	}
 
 	manifest, err := engagement.BuildManifest(scan, packFiles)
 	if err == nil {
 		raw, _ := json.MarshalIndent(manifest, "", "  ")
-		_ = writeBytes("manifest.json", raw)
+		packFiles["manifest.json"] = raw
 	}
 
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	names := make([]string, 0, len(packFiles))
+	for name := range packFiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		wtr, err := zw.Create(name)
+		if err != nil {
+			s.internalError(w, r, "zip create "+name, err)
+			return
+		}
+		if _, err := wtr.Write(packFiles[name]); err != nil {
+			s.internalError(w, r, "zip write "+name, err)
+			return
+		}
+	}
 	if err := zw.Close(); err != nil {
 		s.internalError(w, r, "close evidence zip", err)
 		return

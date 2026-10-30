@@ -23,7 +23,7 @@ import (
 var ErrScanNotFound = errors.New("store: scan not found")
 
 // schemaVersion is the current on-disk schema revision.
-const schemaVersion = 4
+const schemaVersion = 5
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS scans (
@@ -149,12 +149,25 @@ CREATE TABLE IF NOT EXISTS host_notes (
   updated_by TEXT NOT NULL DEFAULT '',
   UNIQUE(engagement, address, port)
 );
+CREATE TABLE IF NOT EXISTS auth_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id TEXT NOT NULL,
+  host_id INTEGER NOT NULL,
+  address TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  domain TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  attempted_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id, severity);
 CREATE INDEX IF NOT EXISTS idx_hosts_scan ON hosts(scan_id);
 CREATE INDEX IF NOT EXISTS idx_credentials_scan ON credentials(scan_id);
 CREATE INDEX IF NOT EXISTS idx_screenshots_scan ON screenshots(scan_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
+CREATE INDEX IF NOT EXISTS idx_auth_attempts_scan ON auth_attempts(scan_id, attempted_at);
 `
 
 // Store is the persistence layer.
@@ -211,8 +224,38 @@ func (s *Store) migrate() error {
 	if err := s.migrateToV4(); err != nil {
 		return err
 	}
+	if err := s.migrateToV5(); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("store: update schema version: %w", err)
+	}
+	// Heal dashboards after historical deletes that left child rows behind.
+	if _, err := s.PurgeOrphanScanChildren(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateToV5 adds auth_attempts for credential-audit timelines (no secrets).
+func (s *Store) migrateToV5() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS auth_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id TEXT NOT NULL,
+  host_id INTEGER NOT NULL,
+  address TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  domain TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  attempted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_attempts_scan ON auth_attempts(scan_id, attempted_at);
+`)
+	if err != nil {
+		return fmt.Errorf("store: migrate v5: %w", err)
 	}
 	return nil
 }
@@ -431,9 +474,9 @@ func (s *Store) RenameScan(id, name string) error {
 	return nil
 }
 
-// DeleteScan removes a scan together with its hosts, findings, credentials and
-// screenshot metadata. The deletes run in one transaction so a partial failure
-// never leaves orphaned child rows behind.
+// DeleteScan removes a scan together with its hosts, findings, credentials,
+// screenshot metadata and auth attempts. The deletes run in one transaction so
+// a partial failure never leaves orphaned child rows behind.
 func (s *Store) DeleteScan(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -441,7 +484,7 @@ func (s *Store) DeleteScan(id string) error {
 	}
 	defer tx.Rollback()
 
-	for _, table := range []string{"findings", "credentials", "screenshots", "hosts"} {
+	for _, table := range []string{"findings", "credentials", "screenshots", "auth_attempts", "hosts"} {
 		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE scan_id = ?`, id); err != nil {
 			return fmt.Errorf("store: delete scan %q: clear %s: %w", id, table, err)
 		}
@@ -461,6 +504,22 @@ func (s *Store) DeleteScan(id string) error {
 		return fmt.Errorf("store: commit delete scan %q: %w", id, err)
 	}
 	return nil
+}
+
+// PurgeOrphanScanChildren removes hosts/findings/credentials/screenshots/
+// auth_attempts whose scan_id no longer exists in scans. Dashboard totals
+// otherwise keep counting deleted audits.
+func (s *Store) PurgeOrphanScanChildren() (int64, error) {
+	var total int64
+	for _, table := range []string{"findings", "credentials", "screenshots", "auth_attempts", "hosts"} {
+		res, err := s.db.Exec(`DELETE FROM ` + table + ` WHERE scan_id NOT IN (SELECT id FROM scans)`)
+		if err != nil {
+			return total, fmt.Errorf("store: purge orphan %s: %w", table, err)
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	return total, nil
 }
 
 // ListScans returns the most recent scans, newest first.
@@ -770,6 +829,50 @@ func (s *Store) ListCredentials(scanID string) ([]model.Credential, error) {
 	return creds, nil
 }
 
+// InsertAuthAttempt stores one credential-audit attempt without the secret.
+func (s *Store) InsertAuthAttempt(a model.AuthAttempt) (int64, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO auth_attempts (scan_id, host_id, address, port, username, domain, outcome, detail, attempted_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ScanID, a.HostID, a.Address, int(a.Port), a.Username, a.Domain, a.Outcome, a.Detail,
+		formatTime(a.AttemptedAt),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("store: insert auth attempt: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// ListAuthAttempts returns credential-audit attempts for a scan, oldest first.
+func (s *Store) ListAuthAttempts(scanID string) ([]model.AuthAttempt, error) {
+	rows, err := s.db.Query(
+		`SELECT id, scan_id, host_id, address, port, username, domain, outcome, detail, attempted_at
+		 FROM auth_attempts WHERE scan_id = ? ORDER BY attempted_at ASC, id ASC`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list auth attempts: %w", err)
+	}
+	defer rows.Close()
+	var out []model.AuthAttempt
+	for rows.Next() {
+		var (
+			a          model.AuthAttempt
+			port       int
+			attempted  string
+		)
+		if err := rows.Scan(&a.ID, &a.ScanID, &a.HostID, &a.Address, &port, &a.Username,
+			&a.Domain, &a.Outcome, &a.Detail, &attempted); err != nil {
+			return nil, fmt.Errorf("store: read auth attempt: %w", err)
+		}
+		a.Port = uint16(port)
+		a.AttemptedAt = parseTime(attempted)
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list auth attempts: %w", err)
+	}
+	return out, nil
+}
+
 // InsertScreenshot stores screenshot metadata and returns its id.
 func (s *Store) InsertScreenshot(sc model.Screenshot) (int64, error) {
 	res, err := s.db.Exec(
@@ -828,7 +931,31 @@ func (s *Store) Summary(scanID string) (model.Summary, error) {
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM scans`).Scan(&sum.ScansTotal); err != nil {
 			return sum, fmt.Errorf("store: count scans: %w", err)
 		}
+		// Only count child rows that still belong to a scan so interrupted
+		// deletes cannot inflate the dashboard TOTAL HOSTS card.
+		owned := ` WHERE scan_id IN (SELECT id FROM scans)`
+		counts := []struct {
+			query string
+			dst   *int64
+		}{
+			{`SELECT COUNT(*) FROM hosts` + owned, &sum.HostsTotal},
+			{`SELECT COUNT(*) FROM hosts` + owned + ` AND state = 'open'`, &sum.HostsOpen},
+			{`SELECT COUNT(*) FROM findings` + owned, &sum.FindingsTotal},
+			{`SELECT COUNT(*) FROM credentials` + owned, &sum.CredsTotal},
+			{`SELECT COUNT(*) FROM screenshots` + owned, &sum.ScreensTotal},
+		}
+		for _, c := range counts {
+			if err := s.db.QueryRow(c.query).Scan(c.dst); err != nil {
+				return sum, fmt.Errorf("store: aggregate summary: %w", err)
+			}
+		}
+		rows, err := s.db.Query(`SELECT severity, COUNT(*) FROM findings` + owned + ` GROUP BY severity`)
+		if err != nil {
+			return sum, fmt.Errorf("store: severity distribution: %w", err)
+		}
+		return finishSummarySeverity(sum, rows)
 	}
+
 	counts := []struct {
 		query string
 		dst   *int64
@@ -849,6 +976,10 @@ func (s *Store) Summary(scanID string) (model.Summary, error) {
 	if err != nil {
 		return sum, fmt.Errorf("store: severity distribution: %w", err)
 	}
+	return finishSummarySeverity(sum, rows)
+}
+
+func finishSummarySeverity(sum model.Summary, rows *sql.Rows) (model.Summary, error) {
 	defer rows.Close()
 	bySeverity := map[model.Severity]int64{}
 	for rows.Next() {

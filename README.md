@@ -22,7 +22,7 @@ web UI.
 > * The BlueKeep check is a **safe detection probe**. The tool never
 >   generates or runs exploit code, payloads or shellcode.
 > * Credential checks are bounded: a per-host failure limit
->   (`--max-auth-failures`, default 5), a global connection rate limit
+>   (`--max-auth-failures`, default 5; `0` disables the limit), a global connection rate limit
 >   (`--rate`, default 10/s) and lockout detection stop the audit before
 >   accounts are locked out.
 > * Verified credentials are stored with restrictive file permissions and are
@@ -43,7 +43,10 @@ web UI.
   reported (no speculative Critical/potential noise).
 * **Credential audit (opt-in)** — NLA/CredSSP + NTLMv2 dictionary checks with
   worker pool, jittered pacing, per-host failure budget and lockout
-  detection.
+  detection. TLS/RDP-only hosts are skipped (aligned with `nla-not-required`);
+  attempt timelines and stop reasons are persisted without secrets. OCR
+  login-tile usernames are quality-gated and prepended into the same-scan
+  wordlist for NLA hosts.
 * **Session screenshots** — when login fails or is skipped, rdpshot tries a
   pre-auth **login-screen** capture over TLS (`xfreerdp /sec:tls` under Xvfb).
   If Winlogon is unreachable (NLA/HYBRID required), no synthetic detection PNG
@@ -53,6 +56,9 @@ web UI.
   framebuffer, else a verified-login evidence card. Drawing Orders / RDPGFX are
   not implemented in the Go path.
 * **Hardening score** — 0–100 compliance score (NLA, TLS, cert, crypto, criticals).
+* **Executive one-pager** — HTML/PDF summary includes NLA coverage %, auth audit
+  outcomes, and open finding counts; compare shows remediated burn-down and
+  hardening score delta.
 * **Estate map** — `/estate` risk graph of hosts and findings per engagement.
 * **Client-trust checks** — certificate hostname/SAN mismatch and cipher posture.
 * **RD Web / Gateway / UDP discovery** — optional detection-only alternate paths.
@@ -62,7 +68,8 @@ web UI.
 * **Engagement workspace** — `/engagements` portal for scope freeze, host notes, and evidence shortcuts.
 * **Remediation playbooks** — static `check_id` guides via `/api/v1/playbooks`.
 * **Scan queue** — `--max-concurrent-scans` (default 2) keeps excess jobs pending; optional `max_runtime_sec`.
-* **Alert rules** — critical / NLA regression / credential-reuse webhooks on scan finish.
+* **Alert rules / SLA** — critical, high, NLA regression, credential-reuse, open-triage
+  critical, and minimum hardening-score floor webhooks on scan finish.
 * **Path posture** — label scans `internal`/`external` for dual-homed compare.
 * **Framebuffer deepen** — Fast-Path updates plus PATBLT/SCRBLT/MEMBLT orders (best-effort).
 * **Kerberos offer** — CredSSP advertises Kerberos when a usable ccache/keytab is present.
@@ -72,7 +79,11 @@ web UI.
 * **Finding triage** — open / confirmed / false positive / remediated workflow.
 * **Engagements & tags** — label scans for client/scope filtering and trends.
 * **Schedules** — interval or five-field cron cadence with optional webhooks.
-* **Evidence pack** — ZIP export of HTML/CSV/PDF plus screenshots and manifest.
+* **Evidence pack v2** — ZIP export of HTML/CSV/PDF, hosts/findings/auth_attempts
+  JSON, masked credentials, screenshots (no synthetic rdp-open), PACK_README, and
+  SHA-256 `manifest.json`.
+* **Kerberos discovery** — when a usable ccache/keytab is present, CredSSP offers
+  Kerberos and records kind/source evidence (no ticket construction / no PIN UI).
 * **Trend / baseline** — posture time series across completed scans.
 * **Local users & audit log** — optional portal accounts with role-aware sessions.
 * **Named wordlist sets** and report branding metadata.
@@ -269,7 +280,7 @@ Values are resolved with the following precedence (highest first):
 | rate (conn/s) | `RDSHOT_RATE` | `--rate` | `10` |
 | dial timeout | `RDSHOT_TIMEOUT` | `--timeout` | `5s` |
 | max targets | `RDSHOT_MAX_TARGETS` | `--max-targets` | `0` (unlimited; set a positive value to cap) |
-| max auth failures per host | `RDSHOT_MAX_AUTH_FAILURES` | `--max-auth-failures` | `5` |
+| max auth failures per host | `RDSHOT_MAX_AUTH_FAILURES` | `--max-auth-failures` | `5` (`0` = unlimited / no lockout fail-safe) |
 | server addr | `RDSHOT_ADDR` | `--addr` | `127.0.0.1:8722` |
 | auth token | `RDSHOT_TOKEN` | `--token` | empty (localhost only) |
 | log level | `RDSHOT_LOG_LEVEL` | `--log-level` | `info` |

@@ -269,6 +269,26 @@ func catalog() []check {
 				return model.FindingNotVulnerable, "CredSSP/NLA reported smart-card logon requirement"
 			},
 		},
+		{
+			id:          "nla-kerberos-offered",
+			title:       "Kerberos offered on the NLA path",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Prefer Kerberos over NTLM for domain accounts; ensure ticket lifetimes and delegation policy match the engagement ROE.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.KerberosOffered {
+					return "", ""
+				}
+				ev := "client advertised Kerberos during CredSSP"
+				if in.Service.Evidence != nil {
+					if k := in.Service.Evidence["kerberos"]; k != "" {
+						ev = k
+					}
+				}
+				// Discovery note: local ccache/keytab made Kerberos offerable.
+				return model.FindingNotVulnerable, ev
+			},
+		},
 	}
 }
 

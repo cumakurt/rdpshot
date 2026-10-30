@@ -50,7 +50,7 @@ func TestParseLoginUsersOCRRejectsShortNoise(t *testing.T) {
 }
 
 func TestExtractLoginUsersOCRMissingTesseract(t *testing.T) {
-	users, err := extractLoginUsersOCR(context.Background(), "/tmp/x.png",
+	res, err := extractLoginUsersOCR(context.Background(), "/tmp/x.png",
 		func(string) (string, error) { return "", errors.New("missing") },
 		func(context.Context, string) (string, error) {
 			t.Fatal("tesseract must not run when missing from PATH")
@@ -59,8 +59,8 @@ func TestExtractLoginUsersOCRMissingTesseract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if users != nil {
-		t.Fatalf("users = %#v, want nil", users)
+	if res.Users != nil {
+		t.Fatalf("users = %#v, want nil", res.Users)
 	}
 }
 
@@ -77,7 +77,7 @@ func TestExtractLoginUsersOCRParsesOutput(t *testing.T) {
 	}
 	f.Close()
 
-	users, err := extractLoginUsersOCR(context.Background(), path,
+	res, err := extractLoginUsersOCR(context.Background(), path,
 		func(string) (string, error) { return "/usr/bin/tesseract", nil },
 		func(_ context.Context, imagePath string) (string, error) {
 			// Prepared OCR crop should be a different temp file under dir.
@@ -90,8 +90,26 @@ func TestExtractLoginUsersOCRParsesOutput(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	want := []string{"Yasemin", "eda", "Other user"}
-	if !reflect.DeepEqual(users, want) {
-		t.Fatalf("users = %#v, want %#v", users, want)
+	if !reflect.DeepEqual(res.Users, want) {
+		t.Fatalf("users = %#v, want %#v", res.Users, want)
+	}
+	if res.Quality < minLoginUsersQuality {
+		t.Fatalf("quality = %v, want >= %v", res.Quality, minLoginUsersQuality)
+	}
+}
+
+func TestApplyLoginUsersQualityGate(t *testing.T) {
+	low := ApplyLoginUsersQualityGate(LoginUsersResult{
+		Users: []string{"noise"}, Quality: 0.1, RawTokenCount: 10,
+	})
+	if low.Users != nil {
+		t.Fatalf("low quality users = %#v, want nil", low.Users)
+	}
+	ok := ApplyLoginUsersQualityGate(LoginUsersResult{
+		Users: []string{"Yasemin"}, Quality: 0.8, RawTokenCount: 1,
+	})
+	if len(ok.Users) != 1 {
+		t.Fatalf("ok users = %#v", ok.Users)
 	}
 }
 

@@ -231,6 +231,46 @@
               {{ else }}
               <p class="text-sm text-subtle">No valid credentials were verified in this scan.</p>
               {{ end }}
+              {{ if .AuthAttempts }}
+              <p class="item-meta mt-3">{{ len .AuthAttempts }} auth attempt(s) recorded (secrets never stored).</p>
+              {{ end }}
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2 class="card-title">Auth Attempts</h2>
+              <span class="badge badge-slate">{{ len .AuthAttempts }}</span>
+            </div>
+            <div class="card-body">
+              {{ if .AuthAttempts }}
+              <div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Host</th>
+                      <th>User</th>
+                      <th>Outcome</th>
+                      <th>Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {{ range .AuthAttempts }}
+                    <tr>
+                      <td class="cell-mono text-xs">{{ .AttemptedAt.Format "15:04:05" }}</td>
+                      <td class="cell-mono text-xs">{{ .Address }}:{{ .Port }}</td>
+                      <td class="cell-mono text-xs">{{ if .Domain }}{{ .Domain }}\{{ end }}{{ if .Username }}{{ .Username }}{{ else }}—{{ end }}</td>
+                      <td><span class="badge badge-slate">{{ .Outcome }}</span></td>
+                      <td class="text-xs text-subtle">{{ .Detail }}</td>
+                    </tr>
+                    {{ end }}
+                  </tbody>
+                </table>
+              </div>
+              {{ else }}
+              <p class="text-sm text-subtle">No credential audit attempts recorded for this scan.</p>
+              {{ end }}
             </div>
           </div>
 
@@ -283,6 +323,7 @@
                   <th>Cert Subject</th>
                   <th>OS Guess</th>
                   <th>Login users</th>
+                  <th>Auth</th>
                 </tr>
               </thead>
               <tbody>
@@ -326,11 +367,19 @@
                         {{ range $i, $u := .Service.LoginUsers }}{{ if $i }}, {{ end }}{{ $u }}{{ end }}
                       {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
                     </td>
+                    <td class="text-xs">
+                      {{ if .Service }}
+                        {{ if .Service.AuthStoppedReason }}
+                          <span class="cell-mono">{{ .Service.AuthAttempts }}/{{ .Service.AuthFailures }}</span>
+                          <p class="item-note">{{ .Service.AuthStoppedReason }}</p>
+                        {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
+                      {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
+                    </td>
                   </tr>
                   {{ end }}
                 {{ else }}
                   <tr>
-                    <td colspan="10" class="table-empty">
+                    <td colspan="11" class="table-empty">
                       No RDP hosts discovered yet.
                     </td>
                   </tr>
@@ -352,7 +401,7 @@
             <div class="mt-4">
               {{ template "auth_advanced" .Wordlists }}
             </div>
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3 mt-4">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 mt-4">
               <div class="field">
                 <label for="brute-concurrency" class="label">Concurrency</label>
                 <input id="brute-concurrency" name="concurrency" type="number" min="1" value="8" class="input">
@@ -360,10 +409,6 @@
               <div class="field">
                 <label for="brute-rate" class="label">Rate (req/s)</label>
                 <input id="brute-rate" name="rate" type="number" min="0" step="0.1" value="5" class="input">
-              </div>
-              <div class="field">
-                <label for="brute-max-failures" class="label">Max failures / host</label>
-                <input id="brute-max-failures" name="max_auth_failures" type="number" min="1" max="50" value="5" class="input">
               </div>
             </div>
             <label class="check-card mt-4">

@@ -185,7 +185,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	rate := fs.Float64("rate", def.Rate, "maximum connection attempts per second")
 	timeout := fs.Duration("timeout", def.Timeout, "per-connection timeout")
 	maxTargets := fs.Int("max-targets", def.MaxTargets, "max expanded endpoints (0 = unlimited)")
-	maxAuthFailures := fs.Int("max-auth-failures", def.MaxAuthFailures, "maximum rejected logins per host during the credential audit")
+	maxAuthFailures := fs.Int("max-auth-failures", def.MaxAuthFailures, "max rejected logins per host (default 5; 0 disables lockout protection)")
 	enableVuln := fs.Bool("enable-vuln", true, "run the vulnerability checks")
 	enableAuth := fs.Bool("enable-auth", false, "run the credential audit (requires --ack-authorized)")
 	enableScreens := fs.Bool("enable-screens", false, "capture session screenshots (requires --ack-authorized)")
@@ -465,7 +465,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	logFormat := fs.String("log-format", def.LogFormat, "log format: text or json")
 	userWordlist := fs.String("user-wordlist", def.UserWordlist, "default username wordlist for credential audits")
 	passwordWordlist := fs.String("password-wordlist", def.PasswordWordlist, "default password wordlist for credential audits")
-	maxAuthFailures := fs.Int("max-auth-failures", def.MaxAuthFailures, "default maximum rejected logins per host")
+	maxAuthFailures := fs.Int("max-auth-failures", def.MaxAuthFailures, "default max rejected logins per host (0 disables lockout protection)")
 	maxTargets := fs.Int("max-targets", def.MaxTargets, "max expanded endpoints per scan (0 = unlimited)")
 	maxConcurrentScans := fs.Int("max-concurrent-scans", def.MaxConcurrentScans, "maximum scans executing at once (others stay pending)")
 

@@ -64,6 +64,14 @@
           <p class="stat-label">Findings removed</p>
           <p class="stat-value tone-emerald">{{ .Diff.Summary.FindingsRemoved }}</p>
         </article>
+        <article class="stat-card">
+          <p class="stat-label">Findings remediated</p>
+          <p class="stat-value tone-emerald">{{ .Diff.Summary.FindingsRemediated }}</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">Hardening score delta</p>
+          <p class="stat-value {{ if ge .Diff.Summary.HardeningScoreDelta 0 }}tone-emerald{{ else }}tone-rose{{ end }}">{{ .Diff.Summary.HardeningScoreDelta }}</p>
+        </article>
       </section>
 
       <section class="grid grid-cols-1 gap-6 lg:grid-cols-2">

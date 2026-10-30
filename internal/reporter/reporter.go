@@ -93,6 +93,52 @@ func severityBuckets(d Data) []severityBucket {
 	return buckets
 }
 
+// executiveExtras are one-pager counters beyond the base severity cards.
+type executiveExtras struct {
+	NLACoveragePct   int64
+	HostsAudited     int64
+	AuthSkippedNoNLA int64
+	OpenVulnerable   int64
+}
+
+// computeExecutiveExtras derives NLA coverage and auth-audit outcomes.
+func computeExecutiveExtras(d Data) executiveExtras {
+	var open, nla, audited, skipped, openVuln int64
+	for _, h := range d.Hosts {
+		if h.State != "open" {
+			continue
+		}
+		open++
+		if h.Service == nil {
+			continue
+		}
+		if h.Service.NLARequired {
+			nla++
+		}
+		if h.Service.AuthStoppedReason != "" || h.Service.AuthAttempts > 0 {
+			audited++
+		}
+		if h.Service.Evidence != nil && h.Service.Evidence["auth_path"] == "skipped_no_credssp" {
+			skipped++
+		}
+	}
+	for _, f := range d.Findings {
+		if f.Status == model.FindingVulnerable || f.Status == model.FindingPotential {
+			openVuln++
+		}
+	}
+	var pct int64
+	if open > 0 {
+		pct = (nla * 100) / open
+	}
+	return executiveExtras{
+		NLACoveragePct:   pct,
+		HostsAudited:     audited,
+		AuthSkippedNoNLA: skipped,
+		OpenVulnerable:   openVuln,
+	}
+}
+
 // severityClass maps a severity to a whitelisted CSS class suffix so arbitrary
 // values can never leak into markup.
 func severityClass(s model.Severity) string {

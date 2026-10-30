@@ -11,33 +11,88 @@ import (
 	"rdpshot/internal/notify"
 )
 
+// Input carries everything Evaluate needs for SLA-style post-scan checks.
+type Input struct {
+	Scan             model.Scan
+	Summary          model.Summary
+	Hosts            []model.Host
+	PriorHosts       []model.Host
+	Findings         []model.Finding
+	HardeningScore   int
+	CredReuseMax     int
+}
+
 // Evaluate decides which alert events to fire for a finished scan.
-func Evaluate(rules model.AlertRules, scan model.Scan, summary model.Summary, hosts []model.Host, priorHosts []model.Host, reuseMax int) []notify.Payload {
+func Evaluate(rules model.AlertRules, in Input) []notify.Payload {
 	if !rules.Enabled || strings.TrimSpace(rules.WebhookURL) == "" {
 		return nil
 	}
 	var out []notify.Payload
-	critical := summary.CountBySeverity(model.SeverityCritical)
+	critical := in.Summary.CountBySeverity(model.SeverityCritical)
+	high := in.Summary.CountBySeverity(model.SeverityHigh)
+	now := time.Now().UTC()
+
 	if rules.OnCritical && critical > 0 {
 		out = append(out, notify.Payload{
-			Event: "alert.critical", At: time.Now().UTC(), ScanID: scan.ID, ScanName: scan.Name,
-			Status: string(scan.Status), Summary: summary, Critical: critical,
-			Engagement: scan.Engagement,
+			Event: "alert.critical", At: now, ScanID: in.Scan.ID, ScanName: in.Scan.Name,
+			Status: string(in.Scan.Status), Summary: in.Summary, Critical: critical, High: high,
+			Engagement: in.Scan.Engagement,
 		})
 	}
-	if rules.OnNLARegressed && nlaRegressed(hosts, priorHosts) {
+	if rules.OnHigh && high > 0 {
 		out = append(out, notify.Payload{
-			Event: "alert.nla_regressed", At: time.Now().UTC(), ScanID: scan.ID, ScanName: scan.Name,
-			Status: string(scan.Status), Engagement: scan.Engagement,
+			Event: "alert.high", At: now, ScanID: in.Scan.ID, ScanName: in.Scan.Name,
+			Status: string(in.Scan.Status), Summary: in.Summary, Critical: critical, High: high,
+			Engagement: in.Scan.Engagement,
+			Detail:     fmt.Sprintf("%d high-severity finding(s)", high),
+		})
+	}
+	if rules.OnNLARegressed && nlaRegressed(in.Hosts, in.PriorHosts) {
+		out = append(out, notify.Payload{
+			Event: "alert.nla_regressed", At: now, ScanID: in.Scan.ID, ScanName: in.Scan.Name,
+			Status: string(in.Scan.Status), Engagement: in.Scan.Engagement,
 		})
 	}
 	minReuse := rules.OnCredReuseMin
-	if minReuse > 0 && reuseMax >= minReuse {
+	if minReuse > 0 && in.CredReuseMax >= minReuse {
 		out = append(out, notify.Payload{
-			Event: "alert.cred_reuse", At: time.Now().UTC(), ScanID: scan.ID, ScanName: scan.Name,
-			Status: string(scan.Status), Engagement: scan.Engagement,
-			Detail: fmt.Sprintf("credential reused on %d hosts", reuseMax),
+			Event: "alert.cred_reuse", At: now, ScanID: in.Scan.ID, ScanName: in.Scan.Name,
+			Status: string(in.Scan.Status), Engagement: in.Scan.Engagement,
+			Detail: fmt.Sprintf("credential reused on %d hosts", in.CredReuseMax),
 		})
+	}
+	if rules.MinHardeningScore > 0 && in.HardeningScore < rules.MinHardeningScore {
+		out = append(out, notify.Payload{
+			Event: "alert.hardening_sla", At: now, ScanID: in.Scan.ID, ScanName: in.Scan.Name,
+			Status: string(in.Scan.Status), Engagement: in.Scan.Engagement,
+			Detail: fmt.Sprintf("hardening score %d below SLA floor %d", in.HardeningScore, rules.MinHardeningScore),
+		})
+	}
+	if rules.OnOpenTriageCritical {
+		openCrit := 0
+		for _, f := range in.Findings {
+			if f.Severity != model.SeverityCritical {
+				continue
+			}
+			if f.Status != model.FindingVulnerable && f.Status != model.FindingPotential {
+				continue
+			}
+			triage := f.TriageStatus
+			if triage == "" {
+				triage = model.TriageOpen
+			}
+			if triage == model.TriageOpen || triage == model.TriageConfirmed {
+				openCrit++
+			}
+		}
+		if openCrit > 0 {
+			out = append(out, notify.Payload{
+				Event: "alert.open_triage_critical", At: now, ScanID: in.Scan.ID, ScanName: in.Scan.Name,
+				Status: string(in.Scan.Status), Summary: in.Summary, Critical: critical,
+				Engagement: in.Scan.Engagement,
+				Detail:     fmt.Sprintf("%d critical finding(s) still open in triage", openCrit),
+			})
+		}
 	}
 	return out
 }

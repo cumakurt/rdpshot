@@ -117,7 +117,9 @@ type ScanOptions struct {
 	EnableAuth       bool     `json:"enable_auth"`
 	EnableScreens    bool     `json:"enable_screens"`
 	EnableDiscovery  bool     `json:"enable_discovery"`
-	MaxAuthFailures  int      `json:"max_auth_failures"`
+	// MaxAuthFailures caps rejected logins per host (lockout fail-safe).
+	// The product default is 5; 0 disables the limit for aggressive audits.
+	MaxAuthFailures int `json:"max_auth_failures"`
 	UserWordlist     string   `json:"user_wordlist,omitempty"`
 	PasswordWordlist string   `json:"password_wordlist,omitempty"`
 	// AuthMode selects how credentials are supplied for auth checks:
@@ -249,6 +251,35 @@ type ServiceInfo struct {
 	// LoginUsers are account tiles observed on the pre-auth Winlogon UI
 	// (OCR from a TLS login-screen capture). Best-effort; may be empty.
 	LoginUsers []string `json:"login_users,omitempty"`
+	// AuthAttempts / AuthFailures summarise the credential audit for this host.
+	AuthAttempts int `json:"auth_attempts,omitempty"`
+	AuthFailures int `json:"auth_failures,omitempty"`
+	// AuthStoppedReason explains why the audit stopped or was skipped.
+	AuthStoppedReason string `json:"auth_stopped_reason,omitempty"`
+}
+
+// Auth attempt outcome values persisted without secrets.
+const (
+	AuthOutcomeSuccess     = "success"
+	AuthOutcomeInvalid     = "invalid"
+	AuthOutcomeLocked      = "locked"
+	AuthOutcomeTransport   = "transport"
+	AuthOutcomeSkipped     = "skipped"
+	AuthOutcomeUnavailable = "unavailable"
+)
+
+// AuthAttempt is one credential check against a host (secret never stored).
+type AuthAttempt struct {
+	ID          int64     `json:"id"`
+	ScanID      string    `json:"scan_id"`
+	HostID      int64     `json:"host_id"`
+	Address     string    `json:"address"`
+	Port        uint16    `json:"port"`
+	Username    string    `json:"username"`
+	Domain      string    `json:"domain,omitempty"`
+	Outcome     string    `json:"outcome"`
+	Detail      string    `json:"detail,omitempty"`
+	AttemptedAt time.Time `json:"attempted_at"`
 }
 
 // Host is one probed endpoint within a scan.
@@ -557,9 +588,15 @@ type HostNote struct {
 type AlertRules struct {
 	WebhookURL      string `json:"webhook_url,omitempty"`
 	OnCritical      bool   `json:"on_critical"`
+	OnHigh          bool   `json:"on_high"`
 	OnNLARegressed  bool   `json:"on_nla_regressed"`
 	OnCredReuseMin  int    `json:"on_cred_reuse_min"`
-	Enabled         bool   `json:"enabled"`
+	// MinHardeningScore fires when the scan score is strictly below this value.
+	// Zero disables the SLA check.
+	MinHardeningScore int `json:"min_hardening_score"`
+	// OnOpenTriageCritical fires when any critical finding is still triage=open.
+	OnOpenTriageCritical bool `json:"on_open_triage_critical"`
+	Enabled              bool `json:"enabled"`
 }
 
 // TrendPoint is one sample in a posture time series.
@@ -597,12 +634,14 @@ type ScanDiff struct {
 
 // ScanDiffSummary is the compact counter block shown above a diff.
 type ScanDiffSummary struct {
-	HostsAdded      int `json:"hosts_added"`
-	HostsRemoved    int `json:"hosts_removed"`
-	HostsChanged    int `json:"hosts_changed"`
-	FindingsAdded   int `json:"findings_added"`
-	FindingsRemoved int `json:"findings_removed"`
-	FindingsChanged int `json:"findings_changed"`
+	HostsAdded           int `json:"hosts_added"`
+	HostsRemoved         int `json:"hosts_removed"`
+	HostsChanged         int `json:"hosts_changed"`
+	FindingsAdded        int `json:"findings_added"`
+	FindingsRemoved      int `json:"findings_removed"`
+	FindingsChanged      int `json:"findings_changed"`
+	FindingsRemediated   int `json:"findings_remediated"`
+	HardeningScoreDelta  int `json:"hardening_score_delta"`
 }
 
 // HostChange records field-level differences for one endpoint that appears in

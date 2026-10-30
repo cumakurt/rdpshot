@@ -18,3 +18,4 @@
 - Tesseract needs a bottom-left tile crop + upscale + contrast (PSM 11). A full-height left strip of wallpaper OCR’s as noise and misses Yasemin/eda.
 - Never persist raw OCR tokens: reject hostnames (`KUBI-HYP-*`), dummy/`dpshot` crumbs, Capitalized 3-letter noise (`Pee`), and “Other user” alone (credential form without tiles). Only store real tile names (+ Other user when tiles exist).
 - Do not fall back to synthetic `rdp-open` detection PNG cards for the gallery. If FreeRDP cannot reach Winlogon (HYBRID/NLA), skip the screenshot entirely.
+- CredSSP password audits require NLA (`NLARequired`); skip them on TLS/RDP-only hosts. Login-screen capture must still *try* FreeRDP `/sec:tls` even when gather selected HYBRID — many hosts accept forced TLS Winlogon. Only the grabber fail-fast (HYBRID_REQUIRED / blank frame) should suppress the shot, not an NLARequired early return.

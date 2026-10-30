@@ -32,12 +32,20 @@ var (
 	// ErrLockedOut means the account is locked or disabled; no further
 	// attempts must be made against the target.
 	ErrLockedOut = errors.New("account locked or disabled")
+	// ErrCredSSPUnavailable means the endpoint does not offer CredSSP/NLA, so
+	// password audits cannot proceed. It is a clean stop, not a transport fault.
+	ErrCredSSPUnavailable = errors.New("CredSSP/NLA not available for password audit")
 )
+
+// StopReasonNoCredSSP is the canonical stopped_reason when CredSSP/NLA is absent.
+const StopReasonNoCredSSP = "CredSSP/NLA not available for password audit"
 
 // Options tunes the credential audit.
 type Options struct {
 	// MaxFailuresPerHost stops the audit against one endpoint after this many
-	// rejected logins (fail-safe). Values <= 0 select the default of 5.
+	// rejected logins (lockout fail-safe). Values <= 0 disable the limit so the
+	// full candidate list may be tried (aggressive mode). Callers that want the
+	// product default must pass 5 explicitly.
 	MaxFailuresPerHost int
 	// Delay is the base pause between attempts.
 	Delay time.Duration
@@ -46,9 +54,6 @@ type Options struct {
 }
 
 func (o Options) withDefaults() Options {
-	if o.MaxFailuresPerHost <= 0 {
-		o.MaxFailuresPerHost = 5
-	}
 	if o.Delay < 0 {
 		o.Delay = 0
 	}
@@ -71,6 +76,9 @@ type Result struct {
 type Hooks struct {
 	OnSuccess func(cred model.Credential)
 	OnFailure func(cred model.Credential, err error)
+	// OnAttempt reports every classified outcome without the secret.
+	// outcome is one of model.AuthOutcome* values.
+	OnAttempt func(cred model.Credential, outcome, detail string)
 }
 
 // Engine runs credential attempts with bounded concurrency by the caller.
@@ -111,7 +119,7 @@ func (e *Engine) Run(ctx context.Context, ep model.Endpoint, hostID int64, scanI
 			result.StoppedReason = "cancelled"
 			return result, err
 		}
-		if result.Failures >= maxFailures {
+		if maxFailures > 0 && result.Failures >= maxFailures {
 			result.StoppedReason = fmt.Sprintf("fail-safe: %d rejected attempts", result.Failures)
 			break
 		}
@@ -138,6 +146,7 @@ func (e *Engine) Run(ctx context.Context, ep model.Endpoint, hostID int64, scanI
 			if e.hooks.OnSuccess != nil {
 				e.hooks.OnSuccess(cred)
 			}
+			e.reportAttempt(cred, model.AuthOutcomeSuccess, "")
 			// One verified credential per endpoint is enough to prove access
 			// and keeps the audit footprint minimal.
 			result.StoppedReason = "valid credential found"
@@ -145,14 +154,21 @@ func (e *Engine) Run(ctx context.Context, ep model.Endpoint, hostID int64, scanI
 		case errors.Is(err, ErrLockedOut):
 			result.LockedOut = true
 			result.StoppedReason = "target reported a locked or disabled account"
+			e.reportAttempt(cred, model.AuthOutcomeLocked, err.Error())
+			return result, nil
+		case errors.Is(err, ErrCredSSPUnavailable):
+			result.StoppedReason = StopReasonNoCredSSP
+			e.reportAttempt(cred, model.AuthOutcomeUnavailable, err.Error())
 			return result, nil
 		case errors.Is(err, ErrInvalidCredential):
 			result.Failures++
 			if e.hooks.OnFailure != nil {
 				e.hooks.OnFailure(cred, err)
 			}
+			e.reportAttempt(cred, model.AuthOutcomeInvalid, err.Error())
 		default:
 			result.StoppedReason = "authentication transport error: " + err.Error()
+			e.reportAttempt(cred, model.AuthOutcomeTransport, err.Error())
 			return result, err
 		}
 	}
@@ -170,5 +186,11 @@ func (e *Engine) pause() {
 	}
 	if delay > 0 {
 		e.sleep(delay)
+	}
+}
+
+func (e *Engine) reportAttempt(cred model.Credential, outcome, detail string) {
+	if e.hooks.OnAttempt != nil {
+		e.hooks.OnAttempt(cred, outcome, detail)
 	}
 }

@@ -80,3 +80,48 @@ Out of scope: exploit/payload, LSASS/hash dump, lateral movement, C2, exfil.
 - [x] Do not persist synthetic rdp-open detection evidence when Winlogon unreachable
 - [x] Filter legacy rdp-open rows out of gallery/API screenshot views
 - [x] Rescan confirmed: HYBRID hosts skip shot; TLS hosts keep rdp-login only
+
+## Reports (2026-10-30)
+
+- [x] Embed captured screenshots in HTML (data URI grid) and PDF (image pages)
+- [x] Omit synthetic rdp-open cards from reports
+
+## Auth fail-safe (2026-10-30)
+
+- [x] max_auth_failures: default 5; 0 disables lockout limit (CLI + web + schedules + brute API)
+
+## P0 + core P1 (2026-10-30)
+
+- [x] Auth observability: Attempts/Failures/StoppedReason on ServiceInfo + scan log
+- [x] CredSSP gate: skip password audit when !NLARequired; map ErrNLARequired → ErrCredSSPUnavailable
+- [x] Schema v5 `auth_attempts` timeline (no secrets) + scan detail UI
+- [x] OCR LoginUsersResult quality gate + `login_users_quality` evidence
+- [x] Scan-wide OCR → wordlist prepend for NLA hosts
+- [x] Executive one-pager: NLA %, auth audited/skipped cards (HTML/PDF)
+- [x] Compare burn-down: FindingsRemediated + HardeningScoreDelta
+- [x] `go test ./...` green
+
+### Review
+
+- TLS/RDP hosts: login-screen OCR + auth skip (`auth_path=skipped_no_credssp`); no candidate burn.
+- HYBRID hosts: CredSSP audit + attempt timeline; login-screen capture skipped while NLA required.
+- Deferred (still): extra Go GFX / RDPGFX orders.
+
+## Next wave continued (2026-10-30)
+
+- [x] SLA alerts: on_high, min_hardening_score, on_open_triage_critical (+ UI)
+- [x] Evidence pack v2: hosts/findings/auth_attempts/score JSON, PACK_README, filter rdp-open
+- [x] Kerberos Probe Status (kind/path) + nla-kerberos-offered capability finding
+- [x] `go test ./...` for this wave
+
+## Screenshot regression fix (2026-10-30)
+
+- [x] Root cause: `captureOpenHostEvidence` early-returned on `NLARequired`, skipping FreeRDP `/sec:tls` Winlogon on HYBRID_EX hosts that still accept forced TLS
+- [x] Removed NLARequired gate; grabber fail-fast remains
+- [x] Live verify: `192.168.42.0/24` + `192.168.112.0/24` (+ known 52.x) → open=3 screens=3 (incl. 112.76 with Yasemin/eda)
+
+## Orphan hosts after delete (2026-10-30)
+
+- [x] Root cause: deleted scans left `hosts` rows; dashboard counted all hosts
+- [x] DeleteScan also clears `auth_attempts`; wait for engine stop before delete
+- [x] PurgeOrphanScanChildren on DB open + after delete; Summary joins existing scans only

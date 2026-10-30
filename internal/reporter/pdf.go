@@ -66,6 +66,7 @@ func PDF(w io.Writer, d Data) error {
 	pdfSeverityTable(doc, d)
 	pdfFindingsTable(doc, d)
 	pdfRemediationSection(doc, d)
+	pdfScreenshotsSection(doc, d)
 
 	if err := doc.Error(); err != nil {
 		return fmt.Errorf("build pdf report: %w", err)
@@ -175,11 +176,16 @@ func pdfExecutiveSummary(doc *fpdf.Fpdf, d Data) {
 	pdfSectionHeading(doc, "Executive Summary")
 	doc.SetFont(pdfFontFamily, "", 8)
 	doc.SetTextColor(45, 45, 45)
+	extra := computeExecutiveExtras(d)
 	critical := d.Summary.CountBySeverity(model.SeverityCritical)
 	rows := [][2]string{
 		{"Hardening Score", fmt.Sprintf("%d (%s)", d.HardeningScore, orDash(d.HardeningGrade))},
 		{"Hosts Total", fmt.Sprintf("%d", d.Summary.HostsTotal)},
 		{"Hosts Open", fmt.Sprintf("%d", d.Summary.HostsOpen)},
+		{"NLA Coverage %", fmt.Sprintf("%d", extra.NLACoveragePct)},
+		{"Open Findings", fmt.Sprintf("%d", extra.OpenVulnerable)},
+		{"Hosts Auth Audited", fmt.Sprintf("%d", extra.HostsAudited)},
+		{"Auth Skipped (no CredSSP)", fmt.Sprintf("%d", extra.AuthSkippedNoNLA)},
 		{"Critical Findings", fmt.Sprintf("%d", critical)},
 		{"Findings Total", fmt.Sprintf("%d", d.Summary.FindingsTotal)},
 	}
@@ -188,7 +194,7 @@ func pdfExecutiveSummary(doc *fpdf.Fpdf, d Data) {
 	}
 	rows = append(rows,
 		[2]string{"Credentials Found", fmt.Sprintf("%d", d.Summary.CredsTotal)},
-		[2]string{"Screenshots", fmt.Sprintf("%d", d.Summary.ScreensTotal)},
+		[2]string{"Screenshots", fmt.Sprintf("%d", len(reportScreens(d.Screens)))},
 	)
 	top := 0
 	for _, f := range sortedFindings(d.Findings) {
@@ -265,6 +271,64 @@ func pdfFindingsTable(doc *fpdf.Fpdf, d Data) {
 		}, pdfTableLineHMm, false)
 	}
 	doc.Ln(4)
+}
+
+// pdfScreenshotsSection embeds captured login/session frames after remediation.
+func pdfScreenshotsSection(doc *fpdf.Fpdf, d Data) {
+	screens := reportScreens(d.Screens)
+	if len(screens) == 0 {
+		return
+	}
+	doc.AddPage()
+	pdfSectionHeading(doc, "Screenshots")
+	doc.SetFont(pdfFontFamily, "", 9)
+	doc.SetTextColor(60, 60, 60)
+	pdfParagraph(doc, fmt.Sprintf("%d captured frame(s). Synthetic detection cards are omitted.", len(screens)), pdfBodyLineHMm)
+	doc.Ln(2)
+
+	for i, s := range screens {
+		caption := endpointText(s.Address, s.Port) + " · " + screenshotLabel(s.Username)
+		if !s.CapturedAt.IsZero() {
+			caption += " · " + formatTime(s.CapturedAt)
+		}
+		data, imageType, err := loadScreenshotBytes(s.FilePath)
+		if err != nil {
+			pdfParagraph(doc, caption+" — image unavailable ("+s.FilePath+")", pdfBodyLineHMm)
+			doc.Ln(2)
+			continue
+		}
+		name := fmt.Sprintf("shot-%d", i)
+		opts := fpdf.ImageOptions{ImageType: imageType, ReadDpi: true}
+		info := doc.RegisterImageOptionsReader(name, opts, bytes.NewReader(data))
+		if info == nil || doc.Error() != nil {
+			return
+		}
+		// Fit within page width; leave room for caption + margins.
+		imgW := pdfUsableWidthMm
+		imgH := imgW * info.Height() / info.Width()
+		if imgH <= 0 {
+			imgH = 80
+		}
+		maxH := pdfBreakY(doc) - doc.GetY() - 18
+		if maxH < 40 {
+			doc.AddPage()
+			maxH = pdfBreakY(doc) - doc.GetY() - 18
+		}
+		if imgH > maxH {
+			scale := maxH / imgH
+			imgW *= scale
+			imgH = maxH
+		}
+		needed := 8 + imgH + 4
+		if doc.GetY()+needed > pdfBreakY(doc) {
+			doc.AddPage()
+		}
+		doc.SetFont(pdfFontFamily, "B", 9)
+		doc.SetTextColor(33, 47, 61)
+		doc.MultiCell(pdfUsableWidthMm, pdfHeadingLineHMm, pdfText(caption), "", "L", false)
+		doc.ImageOptions(name, pdfPageMarginMm, doc.GetY(), imgW, 0, false, opts, 0, "")
+		doc.SetY(doc.GetY() + imgH + 4)
+	}
 }
 
 // pdfRemediationSection lists every finding's remediation guidance.

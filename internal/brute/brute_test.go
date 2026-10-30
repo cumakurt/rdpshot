@@ -85,6 +85,24 @@ func TestRunStopsAtFailSafeLimit(t *testing.T) {
 	}
 }
 
+func TestRunUnlimitedFailuresWhenLimitDisabled(t *testing.T) {
+	auth := &fakeAuth{valid: map[string]string{}}
+	engine := New(auth, Options{MaxFailuresPerHost: 0}, Hooks{}, quietLogger())
+	ep := model.Endpoint{Address: "10.0.0.2", Port: 3389}
+	cands := testCandidates("u:1", "u:2", "u:3", "u:4")
+
+	result, err := engine.Run(context.Background(), ep, 1, "s", cands)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.Attempts != len(cands) || result.Failures != len(cands) {
+		t.Fatalf("attempts=%d failures=%d, want full list %d", result.Attempts, result.Failures, len(cands))
+	}
+	if result.StoppedReason != "candidate list exhausted" {
+		t.Fatalf("stopped reason = %q", result.StoppedReason)
+	}
+}
+
 func TestRunStopsOnLockout(t *testing.T) {
 	auth := &fakeAuth{valid: map[string]string{}, lockedFor: "admin"}
 	engine := New(auth, Options{MaxFailuresPerHost: 10}, Hooks{}, quietLogger())
@@ -130,6 +148,47 @@ func TestRunHonoursCancellation(t *testing.T) {
 	}
 	if result.Attempts != 0 {
 		t.Fatalf("attempts = %d, want 0", result.Attempts)
+	}
+}
+
+func TestRunStopsOnCredSSPUnavailable(t *testing.T) {
+	auth := &fakeAuth{failWith: ErrCredSSPUnavailable}
+	var outcomes []string
+	engine := New(auth, Options{MaxFailuresPerHost: 5}, Hooks{
+		OnAttempt: func(_ model.Credential, outcome, _ string) {
+			outcomes = append(outcomes, outcome)
+		},
+	}, quietLogger())
+	result, err := engine.Run(context.Background(), model.Endpoint{Address: "10.0.0.9", Port: 3389}, 1, "s",
+		testCandidates("u:1", "u:2"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.Attempts != 1 || result.Failures != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.StoppedReason != StopReasonNoCredSSP {
+		t.Fatalf("stopped = %q", result.StoppedReason)
+	}
+	if len(outcomes) != 1 || outcomes[0] != model.AuthOutcomeUnavailable {
+		t.Fatalf("outcomes = %#v", outcomes)
+	}
+}
+
+func TestPrependOCRUsers(t *testing.T) {
+	base, err := BuildCandidates([]string{"admin"}, []string{"p1", "p2"}, "LAB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := PrependOCRUsers(base, []string{"Yasemin", "admin", "Other user"}, "LAB")
+	if len(got) != len(base)+2 {
+		t.Fatalf("len = %d, want %d", len(got), len(base)+2)
+	}
+	if got[0].Username != "Yasemin" || got[0].Domain != "LAB" || got[0].Secret != "p1" {
+		t.Fatalf("first = %+v", got[0])
+	}
+	if got[1].Username != "Yasemin" || got[1].Secret != "p2" {
+		t.Fatalf("second = %+v", got[1])
 	}
 }
 

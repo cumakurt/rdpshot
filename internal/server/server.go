@@ -48,8 +48,8 @@ const (
 	maxWordlistUploadBytes = 2 << 20
 	// maxTargetsUploadBytes caps one uploaded targets list file.
 	maxTargetsUploadBytes = 2 << 20
-	// maxAuthFailureLimit bounds the per-host credential attempts a re-audit
-	// may request.
+	// maxAuthFailureLimit is the highest finite per-host fail-safe the API
+	// accepts (0 remains valid and means unlimited).
 	maxAuthFailureLimit = 50
 	// recentEventsLimit bounds the in-memory recent event buffer used by the
 	// dashboard data.
@@ -435,6 +435,21 @@ func (s *Server) cancelScan(scanID string) bool {
 		run.cancel()
 	}
 	return ok
+}
+
+// waitScanStopped blocks until the scan is no longer tracked in s.runs or the
+// timeout elapses. Used before DeleteScan to avoid orphan host rows.
+func (s *Server) waitScanStopped(scanID string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		s.runsMu.Lock()
+		_, ok := s.runs[scanID]
+		s.runsMu.Unlock()
+		if !ok {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // cancelAllScans cancels every tracked run and waits briefly for the engines

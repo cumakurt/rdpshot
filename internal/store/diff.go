@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"rdpshot/internal/model"
+	"rdpshot/internal/score"
 )
 
 // DiffScans compares the hosts and findings of two scans. against is treated
@@ -104,13 +105,32 @@ func (s *Store) DiffScans(baseID, againstID string) (model.ScanDiff, error) {
 		}
 	}
 
+	remediated := 0
+	for key, before := range baseFindingMap {
+		if before.Status != model.FindingVulnerable {
+			continue
+		}
+		after, ok := againstFindingMap[key]
+		if !ok {
+			remediated++
+			continue
+		}
+		if after.TriageStatus == model.TriageRemediated && before.TriageStatus != model.TriageRemediated {
+			remediated++
+		}
+	}
+	baseScore := score.EvaluateScan(baseID, baseHosts, baseFindings)
+	againstScore := score.EvaluateScan(againstID, againstHosts, againstFindings)
+
 	diff.Summary = model.ScanDiffSummary{
-		HostsAdded:      len(diff.HostsAdded),
-		HostsRemoved:    len(diff.HostsRemoved),
-		HostsChanged:    len(diff.HostsChanged),
-		FindingsAdded:   len(diff.FindingsAdded),
-		FindingsRemoved: len(diff.FindingsRemoved),
-		FindingsChanged: len(diff.FindingsChanged),
+		HostsAdded:          len(diff.HostsAdded),
+		HostsRemoved:        len(diff.HostsRemoved),
+		HostsChanged:        len(diff.HostsChanged),
+		FindingsAdded:       len(diff.FindingsAdded),
+		FindingsRemoved:     len(diff.FindingsRemoved),
+		FindingsChanged:     len(diff.FindingsChanged),
+		FindingsRemediated:  remediated,
+		HardeningScoreDelta: againstScore.Score - baseScore.Score,
 	}
 	return diff, nil
 }

@@ -106,10 +106,16 @@
             </div>
             <label class="check-row"><input id="alert-enabled" type="checkbox" class="checkbox"> Enable alerts</label>
             <label class="check-row"><input id="alert-critical" type="checkbox" class="checkbox"> On critical findings</label>
+            <label class="check-row"><input id="alert-high" type="checkbox" class="checkbox"> On high findings</label>
             <label class="check-row"><input id="alert-nla" type="checkbox" class="checkbox"> On NLA regression</label>
+            <label class="check-row"><input id="alert-open-crit" type="checkbox" class="checkbox"> On open triage critical</label>
             <div class="field">
               <label class="label" for="alert-reuse">Cred reuse minimum hosts</label>
               <input id="alert-reuse" name="on_cred_reuse_min" type="number" min="0" value="2" class="input">
+            </div>
+            <div class="field">
+              <label class="label" for="alert-hardening">Min hardening score (SLA; 0=off)</label>
+              <input id="alert-hardening" name="min_hardening_score" type="number" min="0" max="100" value="0" class="input">
             </div>
             <div class="sm:col-span-2"><button type="submit" class="btn btn-ghost">Save alerts</button></div>
           </form>
