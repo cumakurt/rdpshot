@@ -1,5 +1,10 @@
 // Package vuln evaluates reconnaissance results against the RDP vulnerability
 // and misconfiguration catalog.
+//
+// Policy: only emit findings that are positively observed (vulnerable) or
+// positively ruled out (not_vulnerable). Speculative "potential"/"inconclusive"
+// outcomes are omitted so reports do not raise false-positive critical noise
+// (for example BlueKeep-on-NLA without a confirmed MS_T120 trigger).
 package vuln
 
 import (
@@ -31,7 +36,8 @@ type check struct {
 	cvss        float64
 	remediation string
 	// evaluate returns the finding status and evidence. An empty status skips
-	// the finding entirely (used when a condition is clearly not present).
+	// the finding entirely (used when a condition is clearly not present or
+	// cannot be proven remotely).
 	evaluate func(in Input) (model.FindingStatus, string)
 }
 
@@ -55,11 +61,21 @@ func catalog() []check {
 			cvss:        7.5,
 			remediation: "Require NLA: set 'User Authentication must be required for remote connections' (fDenyTSConnections / RequireNLA policy).",
 			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil {
+					return "", ""
+				}
 				if in.Service.NLARequired {
 					return model.FindingNotVulnerable, "server requires CredSSP/NLA before the session is established"
 				}
-				return model.FindingVulnerable,
-					"negotiation selected " + rdp.ProtocolName(in.Service.NegotiatedProtocol) + " without NLA"
+				// Only assert missing NLA when negotiation clearly selected a
+				// non-CredSSP path (standard RDP or TLS-only).
+				switch in.Service.NegotiatedProtocol {
+				case rdp.ProtocolRDP, rdp.ProtocolSSL:
+					return model.FindingVulnerable,
+						"negotiation selected " + rdp.ProtocolName(in.Service.NegotiatedProtocol) + " without NLA"
+				default:
+					return "", ""
+				}
 			},
 		},
 		{
@@ -69,7 +85,7 @@ func catalog() []check {
 			cvss:        5.3,
 			remediation: "Configure the RDP listener to use TLS (Security Layer = Negotiate or SSL) and disable the legacy RDP security layer.",
 			evaluate: func(in Input) (model.FindingStatus, string) {
-				if in.Service.NegotiatedProtocol != rdp.ProtocolRDP {
+				if in.Service == nil || in.Service.NegotiatedProtocol != rdp.ProtocolRDP {
 					return "", ""
 				}
 				return model.FindingVulnerable,
@@ -87,27 +103,15 @@ func catalog() []check {
 			evaluate:    evaluateBlueKeep,
 		},
 		{
-			id:          "dejablue-cve-2019-1181-1182",
-			title:       "Possible DejaBlue RDS vulnerabilities (CVE-2019-1181/1182)",
-			severity:    model.SeverityCritical,
-			cve:         "CVE-2019-1182",
-			cvss:        9.8,
-			remediation: "Apply the August 2019 cumulative update (or later) and enforce NLA. Verify the patch state locally; remote detection is not conclusive.",
-			evaluate: func(in Input) (model.FindingStatus, string) {
-				if in.Service.NLARequired {
-					return "", ""
-				}
-				return model.FindingPotential,
-					"RDP is reachable without NLA; DejaBlue affects unpatched Windows 7/Server 2008 R2 through Server 2019 and cannot be confirmed remotely. Verify the patch level."
-			},
-		},
-		{
 			id:          "weak-encryption",
 			title:       "Weak or disabled RDP encryption",
 			severity:    model.SeverityHigh,
 			cvss:        7.5,
 			remediation: "Set the RDP encryption level to 'High' or 'FIPS Compliant' and disable 40/56-bit RC4 methods.",
 			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil {
+					return "", ""
+				}
 				level := strings.ToLower(in.Service.EncryptionLevel)
 				if level == "" {
 					return "", ""
@@ -117,13 +121,18 @@ func catalog() []check {
 					return model.FindingVulnerable,
 						fmt.Sprintf("encryption level is %q (methods 0x%08x)", in.Service.EncryptionLevel, in.Service.EncryptionMethods)
 				case "client_compatible":
-					if in.Service.EncryptionMethods != 0 && in.Service.EncryptionMethods&0x0000000B == in.Service.EncryptionMethods &&
-						in.Service.EncryptionMethods&0x00000002 == 0 {
+					// Only confirm when the advertised methods are exclusively
+					// 40-bit and/or 56-bit RC4 (bits 0x1 and 0x8) with no 128-bit.
+					methods := in.Service.EncryptionMethods
+					legacyOnly := methods != 0 &&
+						methods&^uint32(0x00000009) == 0 &&
+						methods&0x00000002 == 0
+					if legacyOnly {
 						return model.FindingVulnerable,
-							fmt.Sprintf("only legacy RC4 key lengths negotiated (methods 0x%08x)", in.Service.EncryptionMethods)
+							fmt.Sprintf("only legacy RC4 key lengths negotiated (methods 0x%08x)", methods)
 					}
-					return model.FindingPotential,
-						fmt.Sprintf("encryption level is client compatible (methods 0x%08x)", in.Service.EncryptionMethods)
+					// Ambiguous client-compatible profiles are not reported.
+					return "", ""
 				}
 				return "", ""
 			},
@@ -143,6 +152,9 @@ func catalog() []check {
 			cvss:        4.3,
 			remediation: "Deploy a certificate issued by a trusted CA (or an internal PKI) for the RDP listener so clients can authenticate the server.",
 			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil {
+					return "", ""
+				}
 				cert := in.Service.Certificate
 				if cert == nil || !cert.SelfSigned {
 					return "", ""
@@ -158,6 +170,9 @@ func catalog() []check {
 			cvss:        4.3,
 			remediation: "Replace the expired certificate on the RDP listener and automate renewal.",
 			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil {
+					return "", ""
+				}
 				cert := in.Service.Certificate
 				if cert == nil || cert.NotAfter.IsZero() {
 					return "", ""
@@ -167,10 +182,7 @@ func catalog() []check {
 					return model.FindingVulnerable,
 						fmt.Sprintf("certificate expired on %s (subject %q)", cert.NotAfter.Format(time.RFC3339), cert.Subject)
 				}
-				if cert.NotAfter.Sub(now) < 30*24*time.Hour {
-					return model.FindingPotential,
-						fmt.Sprintf("certificate expires on %s (subject %q)", cert.NotAfter.Format(time.RFC3339), cert.Subject)
-				}
+				// Soon-to-expire is operational hygiene, not a confirmed vuln.
 				return "", ""
 			},
 		},
@@ -181,66 +193,11 @@ func catalog() []check {
 			cvss:        2.0,
 			remediation: "Review RDP security layer policy and supported protocols so authorized clients can negotiate TLS/CredSSP.",
 			evaluate: func(in Input) (model.FindingStatus, string) {
-				if in.Service.NegotiationFailureCode == nil {
+				if in.Service == nil || in.Service.NegotiationFailureCode == nil {
 					return "", ""
 				}
 				return model.FindingVulnerable,
 					fmt.Sprintf("server returned RDP_NEG_FAILURE code 0x%08x", *in.Service.NegotiationFailureCode)
-			},
-		},
-		{
-			id:          "hybrid-ex-not-offered",
-			title:       "Modern CredSSP (HYBRID_EX) not selected",
-			severity:    model.SeverityInfo,
-			cvss:        0,
-			remediation: "Prefer HYBRID_EX where supported so CredSSP early-user-auth hardening is available to clients.",
-			evaluate: func(in Input) (model.FindingStatus, string) {
-				switch in.Service.NegotiatedProtocol {
-				case rdp.ProtocolHybridEx:
-					return model.FindingNotVulnerable, "negotiation selected HYBRID_EX"
-				case rdp.ProtocolHybrid:
-					return model.FindingPotential, "negotiation selected HYBRID (CredSSP) without HYBRID_EX"
-				case rdp.ProtocolSSL:
-					return model.FindingPotential, "negotiation selected SSL/TLS without CredSSP"
-				default:
-					return "", ""
-				}
-			},
-		},
-		{
-			id:          "cert-missing-san",
-			title:       "RDP certificate lacks subject alternative names",
-			severity:    model.SeverityLow,
-			cvss:        3.1,
-			remediation: "Issue an RDP certificate with DNS/IP SANs matching the listener hostname so clients can validate identity.",
-			evaluate: func(in Input) (model.FindingStatus, string) {
-				cert := in.Service.Certificate
-				if cert == nil {
-					return "", ""
-				}
-				if len(cert.DNSNames) > 0 {
-					return model.FindingNotVulnerable, fmt.Sprintf("certificate SANs: %s", strings.Join(cert.DNSNames, ", "))
-				}
-				return model.FindingPotential,
-					fmt.Sprintf("certificate subject %q has no DNS SANs", cert.Subject)
-			},
-		},
-		{
-			id:          "legacy-rdp-build",
-			title:       "Legacy RDP server build advertised",
-			severity:    model.SeverityMedium,
-			cvss:        5.0,
-			remediation: "Upgrade Windows / Remote Desktop Services to a supported build and confirm cumulative updates are applied.",
-			evaluate: func(in Input) (model.FindingStatus, string) {
-				if in.Service.ServerVersion == 0 {
-					return "", ""
-				}
-				// RDP 5.x / early 6.x era builds commonly appear below 0x00080000.
-				if in.Service.ServerVersion < 0x00080000 {
-					return model.FindingPotential,
-						fmt.Sprintf("MCS server core version 0x%08x suggests a legacy RDP stack", in.Service.ServerVersion)
-				}
-				return "", ""
 			},
 		},
 		{
@@ -258,7 +215,7 @@ func catalog() []check {
 			cvss:        0,
 			remediation: "Restrict RD Web to VPN or trusted networks and enforce MFA.",
 			evaluate: func(in Input) (model.FindingStatus, string) {
-				if in.Service == nil || !in.Service.RDWeb {
+				if in.Service == nil || !in.Service.RDWeb || strings.TrimSpace(in.Service.RDWebURL) == "" {
 					return "", ""
 				}
 				return model.FindingVulnerable, "RD Web markers observed at " + in.Service.RDWebURL
@@ -287,20 +244,15 @@ func catalog() []check {
 				if in.Service == nil || !in.Service.UDP3389 {
 					return "", ""
 				}
-				return model.FindingPotential, "UDP/3389 probe indicated a reachable service"
-			},
-		},
-		{
-			id:          "nla-kerberos-offered",
-			title:       "Kerberos mechanism offered during NLA",
-			severity:    model.SeverityInfo,
-			cvss:        0,
-			remediation: "Prefer Kerberos over NTLM for NLA when domain-joined; ensure ticket caches are rotated and constrained delegation is reviewed.",
-			evaluate: func(in Input) (model.FindingStatus, string) {
-				if in.Service == nil || !in.Service.KerberosOffered {
+				// Only confirm when discovery recorded a positive UDP response.
+				ev := ""
+				if in.Service.Evidence != nil {
+					ev = in.Service.Evidence["udp_3389"]
+				}
+				if !strings.Contains(strings.ToLower(ev), "responded") {
 					return "", ""
 				}
-				return model.FindingVulnerable, "CredSSP SPNEGO advertised Kerberos (ccache/keytab available on scanner)"
+				return model.FindingVulnerable, ev
 			},
 		},
 		{
@@ -313,7 +265,8 @@ func catalog() []check {
 				if in.Service == nil || !in.Service.SmartCardRequired {
 					return "", ""
 				}
-				return model.FindingVulnerable, "CredSSP/NLA reported smart-card logon requirement"
+				// Capability note, not a vulnerability.
+				return model.FindingNotVulnerable, "CredSSP/NLA reported smart-card logon requirement"
 			},
 		},
 	}
@@ -324,22 +277,19 @@ func evaluateCertHostname(in Input) (model.FindingStatus, string) {
 		return "", ""
 	}
 	host := strings.TrimSpace(in.TargetHost)
-	if netIP := parseIPLike(host); netIP {
-		// IP targets rarely match DNS SANs; treat as informational potential.
-		if len(in.Service.Certificate.DNSNames) == 0 {
-			return model.FindingPotential, "scanned by IP and certificate has no DNS SANs"
-		}
+	if parseIPLike(host) {
+		// IP targets cannot be matched against DNS SANs with certainty.
+		return "", ""
+	}
+	if len(in.Service.Certificate.DNSNames) == 0 {
+		// Without SANs we cannot prove a hostname mismatch.
 		return "", ""
 	}
 	host = strings.ToLower(host)
-	subject := strings.ToLower(in.Service.Certificate.Subject)
 	for _, san := range in.Service.Certificate.DNSNames {
 		if strings.EqualFold(san, host) || matchWildcard(san, host) {
 			return model.FindingNotVulnerable, "certificate SAN matches " + host
 		}
-	}
-	if strings.Contains(subject, "cn="+host) {
-		return model.FindingPotential, "CN appears to match but SAN verification failed for " + host
 	}
 	return model.FindingVulnerable, fmt.Sprintf("certificate SANs %v do not include scanned host %q", in.Service.Certificate.DNSNames, host)
 }
@@ -362,29 +312,37 @@ func matchWildcard(pattern, host string) bool {
 	return prefix != "" && !strings.Contains(prefix, ".")
 }
 
+// evaluateBlueKeep reports only confirmed probe outcomes. NLA-blocked hosts
+// (probe not run) are omitted: Critical "potential" findings without an
+// MS_T120 Disconnect Provider Ultimatum are treated as false-positive noise.
 func evaluateBlueKeep(in Input) (model.FindingStatus, string) {
-	switch {
-	case in.BlueKeep == nil:
-		if in.Service.NLARequired {
-			return model.FindingPotential,
-				"NLA is enforced, which blocks pre-auth exploitation; the underlying bug may still be unpatched. Verify the update state."
+	if in.BlueKeep == nil || !in.BlueKeep.Attempted {
+		return "", ""
+	}
+	if in.BlueKeep.Triggered {
+		if !blueKeepTriggerConfirmed(in.BlueKeep) {
+			return "", ""
 		}
-		return model.FindingInconclusive,
-			"MS_T120 detection probe was not executed for this endpoint"
-	case in.BlueKeep.Attempted && in.BlueKeep.Triggered:
 		return model.FindingVulnerable,
 			in.BlueKeep.Reason + " (" + in.BlueKeep.Evidence + ")"
-	case in.BlueKeep.Attempted:
-		return model.FindingNotVulnerable,
-			in.BlueKeep.Reason + " (" + in.BlueKeep.Evidence + ")"
-	default:
-		return model.FindingInconclusive,
-			in.BlueKeep.Reason + " (" + in.BlueKeep.Evidence + ")"
 	}
+	return model.FindingNotVulnerable,
+		in.BlueKeep.Reason + " (" + in.BlueKeep.Evidence + ")"
+}
+
+// blueKeepTriggerConfirmed requires the MCS Disconnect Provider Ultimatum
+// signal that the safe MS_T120 probe looks for. Generic disconnects are not
+// enough to claim CVE-2019-0708.
+func blueKeepTriggerConfirmed(bk *rdp.BlueKeepResult) bool {
+	if bk == nil || !bk.Triggered {
+		return false
+	}
+	blob := strings.ToLower(bk.Reason + " " + bk.Evidence)
+	return strings.Contains(blob, "disconnect provider")
 }
 
 func evaluateWeakTLS(in Input) (model.FindingStatus, string) {
-	if in.Service.TLSVersion == "" {
+	if in.Service == nil || in.Service.TLSVersion == "" {
 		return "", ""
 	}
 	var issues []string
@@ -393,7 +351,7 @@ func evaluateWeakTLS(in Input) (model.FindingStatus, string) {
 		issues = append(issues, "negotiated "+in.Service.TLSVersion)
 	}
 	suite := strings.ToUpper(in.Service.TLSCipherSuite)
-	for _, weak := range []string{"RC4", "3DES", "_NULL_", "EXPORT", "_anon_", "DES_"} {
+	for _, weak := range []string{"RC4", "3DES", "_NULL_", "EXPORT", "_ANON_", "DES_"} {
 		if strings.Contains(suite, weak) {
 			issues = append(issues, "weak cipher suite "+in.Service.TLSCipherSuite)
 			break
@@ -406,15 +364,18 @@ func evaluateWeakTLS(in Input) (model.FindingStatus, string) {
 }
 
 // Evaluate runs every applicable check against one endpoint and returns the
-// findings. Conditions that are clearly absent are not reported; checks with
-// security relevance (for example BlueKeep) are always reported so the report
-// documents both confirmed and ruled-out risk.
+// findings. Conditions that are clearly absent are not reported. Speculative
+// potential/inconclusive outcomes are filtered out so only confirmed
+// vulnerable / not_vulnerable results reach the report.
 func Evaluate(ep model.Endpoint, in Input) []model.Finding {
 	var findings []model.Finding
 	now := time.Now().UTC()
 	for _, c := range catalog() {
 		status, evidence := c.evaluate(in)
 		if status == "" {
+			continue
+		}
+		if status != model.FindingVulnerable && status != model.FindingNotVulnerable {
 			continue
 		}
 		findings = append(findings, model.Finding{

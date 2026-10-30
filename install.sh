@@ -297,11 +297,11 @@ build_packages_for() {
 
 capture_packages_for() {
   case "$PM" in
-    apt) printf '%s\n' freerdp2-x11 xvfb imagemagick ;;
-    dnf | yum) printf '%s\n' freerdp xorg-x11-server-Xvfb ImageMagick ;;
-    pacman) printf '%s\n' freerdp xorg-server-xvfb imagemagick ;;
-    apk) printf '%s\n' freerdp xvfb imagemagick ;;
-    zypper) printf '%s\n' freerdp xorg-x11-server-Xvfb ImageMagick ;;
+    apt) printf '%s\n' freerdp2-x11 xvfb imagemagick tesseract-ocr ;;
+    dnf | yum) printf '%s\n' freerdp xorg-x11-server-Xvfb ImageMagick tesseract ;;
+    pacman) printf '%s\n' freerdp xorg-server-xvfb imagemagick tesseract ;;
+    apk) printf '%s\n' freerdp xvfb imagemagick tesseract-ocr ;;
+    zypper) printf '%s\n' freerdp xorg-x11-server-Xvfb ImageMagick tesseract-ocr ;;
   esac
 }
 

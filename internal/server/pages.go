@@ -11,6 +11,7 @@ import (
 	"rdpshot/internal/about"
 	"rdpshot/internal/model"
 	"rdpshot/internal/score"
+	"rdpshot/internal/screenshot"
 	"rdpshot/internal/store"
 	"rdpshot/web"
 )
@@ -256,7 +257,7 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "gallery", GalleryData{
 		Title:     "Gallery",
 		ActiveNav: "gallery",
-		Items:     items,
+		Items:     screenshotViews(items),
 	})
 }
 
@@ -397,11 +398,15 @@ func maskCredentials(creds []model.Credential) []model.Credential {
 	return out
 }
 
-// screenshotViews rewrites file paths to their read-only web URLs.
+// screenshotViews rewrites file paths to their read-only web URLs and drops
+// synthetic open-host detection cards (legacy rdp-open rows).
 func screenshotViews(screens []model.Screenshot) []model.Screenshot {
-	out := make([]model.Screenshot, len(screens))
-	for i, sc := range screens {
-		out[i] = screenshotView(sc)
+	out := make([]model.Screenshot, 0, len(screens))
+	for _, sc := range screens {
+		if sc.Username == screenshot.OpenHostLabel {
+			continue
+		}
+		out = append(out, screenshotView(sc))
 	}
 	return out
 }

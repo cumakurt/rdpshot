@@ -3,6 +3,8 @@ package screenshot
 import (
 	"context"
 	"errors"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,4 +195,136 @@ type stubGrabber struct{ err error }
 func (s stubGrabber) Available() error { return nil }
 func (s stubGrabber) Grab(context.Context, model.Endpoint, model.Credential) (model.Screenshot, error) {
 	return model.Screenshot{}, s.err
+}
+
+func TestGrabLoginScreenStoresImage(t *testing.T) {
+	dir := t.TempDir()
+	grabber, rec := fakeGrabber(t, dir, true, true)
+	grabber.run = func(_ context.Context, name string, args []string, env []string, stdin string) ([]byte, error) {
+		rec.name = name
+		rec.args = args
+		rec.env = env
+		rec.stdin = stdin
+		out := envValue(env, "RDSHOT_OUT")
+		img := image.NewRGBA(image.Rect(0, 0, 64, 48))
+		for y := 0; y < 48; y++ {
+			for x := 0; x < 64; x++ {
+				i := y*img.Stride + x*4
+				img.Pix[i+0] = 40
+				img.Pix[i+1] = 120
+				img.Pix[i+2] = 180
+				img.Pix[i+3] = 255
+			}
+		}
+		f, err := os.Create(out)
+		if err != nil {
+			return nil, err
+		}
+		if err := png.Encode(f, img); err != nil {
+			f.Close()
+			return nil, err
+		}
+		f.Close()
+		return []byte("ok"), nil
+	}
+
+	shot, err := grabber.GrabLoginScreen(context.Background(),
+		model.Endpoint{Address: "192.168.112.76", Port: 3389})
+	if err != nil {
+		t.Fatalf("grab login screen: %v", err)
+	}
+	if shot.Username != LoginScreenLabel {
+		t.Fatalf("username = %q, want %q", shot.Username, LoginScreenLabel)
+	}
+	if filepath.Dir(shot.FilePath) != dir {
+		t.Fatalf("path = %s", shot.FilePath)
+	}
+	joined := strings.Join(rec.args, " ")
+	if !strings.Contains(joined, "-screen 0 1024x768x24") {
+		t.Fatalf("xvfb geometry missing from args: %#v", rec.args)
+	}
+	scriptBody := ""
+	for i, a := range rec.args {
+		if a == "-c" && i+1 < len(rec.args) {
+			scriptBody = rec.args[i+1]
+		}
+	}
+	if !strings.Contains(scriptBody, "/sec:tls") {
+		t.Fatalf("login script missing /sec:tls: %q", scriptBody)
+	}
+	if !strings.Contains(scriptBody, ` /u:"$RDSHOT_USER"`) && !strings.Contains(scriptBody, `/u:"$RDSHOT_USER"`) {
+		t.Fatalf("login script must pass dummy user: %q", scriptBody)
+	}
+	if !strings.Contains(scriptBody, "Escape") || !strings.Contains(scriptBody, "BackSpace") {
+		t.Fatalf("login script must dismiss Other-user / clear dummy username: %q", scriptBody)
+	}
+	if strings.Contains(scriptBody, "/from-stdin") {
+		t.Fatal("login-screen capture must not send a password on stdin")
+	}
+	if envValue(rec.env, "RDSHOT_USER") != loginScreenDummyUser {
+		t.Fatalf("RDSHOT_USER = %q", envValue(rec.env, "RDSHOT_USER"))
+	}
+	if rec.stdin != "" {
+		t.Fatalf("stdin = %q, want empty", rec.stdin)
+	}
+}
+
+func TestGrabLoginScreenRejectsBlankPNG(t *testing.T) {
+	dir := t.TempDir()
+	grabber, _ := fakeGrabber(t, dir, true, true)
+	// Overwrite the fake "png-bytes" with a real solid-black PNG after run.
+	grabber.run = func(_ context.Context, name string, args []string, env []string, stdin string) ([]byte, error) {
+		out := envValue(env, "RDSHOT_OUT")
+		img := image.NewRGBA(image.Rect(0, 0, 64, 48))
+		f, err := os.Create(out)
+		if err != nil {
+			return nil, err
+		}
+		if err := png.Encode(f, img); err != nil {
+			f.Close()
+			return nil, err
+		}
+		f.Close()
+		return []byte("ok"), nil
+	}
+	_, err := grabber.GrabLoginScreen(context.Background(),
+		model.Endpoint{Address: "10.0.0.9", Port: 3389})
+	if err == nil || !strings.Contains(err.Error(), "blank") {
+		t.Fatalf("err = %v, want blank-frame error", err)
+	}
+}
+
+func TestGrabLoginScreenMissingTools(t *testing.T) {
+	grabber, _ := fakeGrabber(t, t.TempDir(), false, false)
+	_, err := grabber.GrabLoginScreen(context.Background(),
+		model.Endpoint{Address: "10.0.0.9", Port: 3389})
+	if !errors.Is(err, ErrGrabberUnavailable) {
+		t.Fatalf("err = %v, want ErrGrabberUnavailable", err)
+	}
+}
+
+func TestGrabOpenHostWritesPNG(t *testing.T) {
+	dir := t.TempDir()
+	grabber := NewEvidenceGrabber(dir)
+	shot, err := grabber.GrabOpenHost(context.Background(),
+		model.Endpoint{Address: "192.168.52.112", Port: 3389},
+		&model.ServiceInfo{
+			NLARequired: true,
+			TLSVersion:  "TLS 1.2",
+			OSGuess:     "Windows",
+			Certificate: &model.CertificateInfo{Subject: "CN=rdp-host", SelfSigned: true},
+		})
+	if err != nil {
+		t.Fatalf("grab open host: %v", err)
+	}
+	if shot.Username != OpenHostLabel {
+		t.Fatalf("username label = %q", shot.Username)
+	}
+	info, err := os.Stat(shot.FilePath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Size() < 100 {
+		t.Fatalf("evidence image too small: %d", info.Size())
+	}
 }

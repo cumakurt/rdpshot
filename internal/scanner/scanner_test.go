@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -729,5 +731,128 @@ func TestRunPublishesLifecycleEvents(t *testing.T) {
 	}
 	if hostDone != len(endpoints) {
 		t.Errorf("got %d host.done events, want %d", hostDone, len(endpoints))
+	}
+}
+
+// TestRunOpenHostSkipsSyntheticEvidenceWhenLoginUIUnavailable verifies that
+// NLA/blocked hosts do not get a synthetic detection PNG in the gallery.
+func TestRunOpenHostSkipsSyntheticEvidenceWhenLoginUIUnavailable(t *testing.T) {
+	const addr = "192.168.52.112"
+	dir := t.TempDir()
+	env := newTestEnv(t, nil, nil)
+	env.engine.deps.OpenEvidence = screenshot.NewEvidenceGrabber(dir)
+	env.engine.deps.LoginScreen = stubLoginScreen{err: errors.New("HYBRID required")}
+	env.gather.script(addr, rdp.GatherResult{
+		Service: model.ServiceInfo{
+			NegotiatedProtocol: rdp.ProtocolHybrid,
+			NLARequired:        true,
+			TLSVersion:         "TLS 1.2",
+			OSGuess:            "Windows",
+		},
+	}, nil)
+
+	opts := baseOptions()
+	opts.EnableAuth = false
+	opts.EnableScreens = false
+	scan := env.newScan(t, "open-host-no-synthetic", opts)
+	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
+
+	shots, err := env.store.ListScreenshots(scan.ID)
+	if err != nil {
+		t.Fatalf("list screenshots: %v", err)
+	}
+	if len(shots) != 0 {
+		t.Fatalf("stored %d screenshots, want 0 (no synthetic detection card)", len(shots))
+	}
+	if scan.Progress.Screens != 0 {
+		t.Errorf("progress.Screens = %d, want 0", scan.Progress.Screens)
+	}
+}
+
+type stubLoginScreen struct {
+	shot model.Screenshot
+	err  error
+}
+
+func (s stubLoginScreen) Available() error { return nil }
+func (s stubLoginScreen) GrabLoginScreen(context.Context, model.Endpoint) (model.Screenshot, error) {
+	return s.shot, s.err
+}
+
+// TestRunPrefersLoginScreenCapture verifies TLS login-screen grabs win over
+// the evidence-card fallback when FreeRDP tooling is wired.
+func TestRunPrefersLoginScreenCapture(t *testing.T) {
+	const addr = "192.168.112.76"
+	dir := t.TempDir()
+	out := filepath.Join(dir, "login.png")
+	if err := os.WriteFile(out, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := newTestEnv(t, nil, nil)
+	env.engine.deps.LoginScreen = stubLoginScreen{
+		shot: model.Screenshot{
+			Address: addr, Port: 3389, Username: screenshot.LoginScreenLabel,
+			FilePath: out, Width: 1024, Height: 768, CapturedAt: time.Now().UTC(),
+		},
+	}
+	env.engine.deps.OpenEvidence = screenshot.NewEvidenceGrabber(dir)
+	env.gather.script(addr, rdp.GatherResult{
+		Service: model.ServiceInfo{
+			NegotiatedProtocol: rdp.ProtocolHybridEx,
+			NLARequired:        true,
+			TLSVersion:         "TLS 1.2",
+		},
+	}, nil)
+
+	opts := baseOptions()
+	opts.EnableAuth = false
+	scan := env.newScan(t, "login-screen", opts)
+	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
+
+	shots, err := env.store.ListScreenshots(scan.ID)
+	if err != nil {
+		t.Fatalf("list screenshots: %v", err)
+	}
+	if len(shots) != 1 {
+		t.Fatalf("stored %d screenshots, want 1", len(shots))
+	}
+	if shots[0].Username != screenshot.LoginScreenLabel {
+		t.Fatalf("username = %q, want %q", shots[0].Username, screenshot.LoginScreenLabel)
+	}
+	hosts, err := env.store.ListHosts(scan.ID)
+	if err != nil {
+		t.Fatalf("list hosts: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].Service == nil {
+		t.Fatalf("hosts = %+v", hosts)
+	}
+	if hosts[0].Service.Evidence["login_screen"] != "ssl-tls" {
+		t.Fatalf("evidence = %#v", hosts[0].Service.Evidence)
+	}
+}
+
+// TestRunLoginScreenFailureStoresNoScreenshot ensures a FreeRDP failure does
+// not invent a synthetic detection card for the gallery.
+func TestRunLoginScreenFailureStoresNoScreenshot(t *testing.T) {
+	const addr = "10.0.0.76"
+	dir := t.TempDir()
+	env := newTestEnv(t, nil, nil)
+	env.engine.deps.LoginScreen = stubLoginScreen{err: errors.New("freerdp failed")}
+	env.engine.deps.OpenEvidence = screenshot.NewEvidenceGrabber(dir)
+	env.gather.script(addr, rdp.GatherResult{
+		Service: model.ServiceInfo{NegotiatedProtocol: rdp.ProtocolSSL, NLARequired: false},
+	}, nil)
+
+	opts := baseOptions()
+	opts.EnableAuth = false
+	scan := env.newScan(t, "login-screen-no-fallback", opts)
+	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
+
+	shots, err := env.store.ListScreenshots(scan.ID)
+	if err != nil {
+		t.Fatalf("list screenshots: %v", err)
+	}
+	if len(shots) != 0 {
+		t.Fatalf("shots = %+v, want none", shots)
 	}
 }

@@ -11,7 +11,7 @@
         <div>
           <p class="page-eyebrow">Attack surface</p>
           <h1 class="page-title mt-1">Estate map</h1>
-          <p class="page-subtitle">Host risk graph from hardening scores and findings.</p>
+          <p class="page-subtitle">Host risk scatter — hover a bubble for details; use the table to read every host.</p>
         </div>
       </section>
 
@@ -38,104 +38,61 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card mb-6">
         <div class="card-head">
-          <h2 class="card-title">Risk map</h2>
+          <div>
+            <h2 class="card-title">Risk map</h2>
+            <p class="card-hint">X = hardening score (left weak → right strong). Y = finding risk (top high → bottom low). Size = findings.</p>
+          </div>
           <span class="badge badge-slate" data-estate-count>0 nodes</span>
         </div>
         <div class="card-body">
-          <svg id="estate-graph" viewBox="0 0 960 520" class="w-full h-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40" role="img" aria-label="Estate risk graph"></svg>
+          <div class="estate-map-wrap">
+            <svg id="estate-graph" viewBox="0 0 960 420" class="estate-map-svg" role="img" aria-label="Estate risk scatter plot"></svg>
+            <div class="estate-tooltip hidden" data-estate-tooltip role="tooltip"></div>
+          </div>
           <p class="card-hint mt-3" data-estate-status>Loading estate graph…</p>
-          <ul class="mt-4 space-y-2 text-sm" data-estate-legend></ul>
+          <ul class="estate-sev-legend mt-4" data-estate-sev-legend aria-label="Severity legend"></ul>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">Hosts</h2>
+          <div class="estate-table-tools">
+            <input type="search" class="input input-sm" placeholder="Filter address…" data-estate-filter autocomplete="off">
+            <select class="input input-sm" data-estate-filter-sev>
+              <option value="">All severities</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+              <option value="none">No findings</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table" data-estate-table>
+            <thead>
+              <tr>
+                <th>Host</th>
+                <th>State</th>
+                <th>Max sev</th>
+                <th>Findings</th>
+                <th>Risk</th>
+                <th>Hardening</th>
+                <th>NLA / TLS</th>
+              </tr>
+            </thead>
+            <tbody data-estate-tbody>
+              <tr><td colspan="7" class="table-empty">Loading…</td></tr>
+            </tbody>
+          </table>
         </div>
       </section>
     </main>
     {{ template "footer" . }}
-    <script src="/static/js/app.js"></script>
-    <script>
-      (function () {
-        var params = new URLSearchParams(window.location.search);
-        var engagement = params.get('engagement') || '';
-        var scanSelect = document.querySelector('[data-estate-scan]');
-        var statusEl = document.querySelector('[data-estate-status]');
-        var countEl = document.querySelector('[data-estate-count]');
-        var legendEl = document.querySelector('[data-estate-legend]');
-        var svg = document.getElementById('estate-graph');
-
-        function severityColor(sev) {
-          switch ((sev || '').toLowerCase()) {
-            case 'critical': return '#e11d48';
-            case 'high': return '#f97316';
-            case 'medium': return '#eab308';
-            case 'low': return '#38bdf8';
-            default: return '#64748b';
-          }
-        }
-
-        function render(graph) {
-          while (svg.firstChild) svg.removeChild(svg.firstChild);
-          var nodes = graph.nodes || [];
-          countEl.textContent = nodes.length + ' nodes';
-          if (!nodes.length) {
-            statusEl.textContent = 'No hosts in this estate yet.';
-            return;
-          }
-          statusEl.textContent = (graph.engagement ? 'Engagement: ' + graph.engagement + ' · ' : '') +
-            nodes.length + ' hosts · ' + ((graph.edges || []).length) + ' finding edges';
-
-          var cols = Math.ceil(Math.sqrt(nodes.length));
-          nodes.forEach(function (n, i) {
-            var col = i % cols;
-            var row = Math.floor(i / cols);
-            var x = 80 + col * Math.min(180, 860 / Math.max(cols, 1));
-            var y = 60 + row * 90;
-            var r = 10 + Math.min(24, (n.risk_score || 0) * 2);
-            var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-            circle.setAttribute('cx', x);
-            circle.setAttribute('cy', y);
-            circle.setAttribute('r', r);
-            circle.setAttribute('fill', n.open ? severityColor(n.max_severity || 'info') : '#94a3b8');
-            circle.setAttribute('opacity', '0.9');
-            circle.setAttribute('title', n.id);
-            svg.appendChild(circle);
-            var label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            label.setAttribute('x', x);
-            label.setAttribute('y', y + r + 14);
-            label.setAttribute('text-anchor', 'middle');
-            label.setAttribute('font-size', '10');
-            label.setAttribute('fill', 'currentColor');
-            label.textContent = n.address + ' · ' + (n.grade || '?') + ' · ' + (n.hardening_score || 0);
-            svg.appendChild(label);
-          });
-
-          legendEl.innerHTML = '';
-          nodes.slice(0, 20).sort(function (a, b) { return (b.risk_score || 0) - (a.risk_score || 0); })
-            .forEach(function (n) {
-              var li = document.createElement('li');
-              li.className = 'flex justify-between gap-4 font-mono text-xs';
-              li.innerHTML = '<span>' + n.id + '</span><span>risk ' + (n.risk_score || 0) +
-                ' · harden ' + (n.hardening_score || 0) + ' (' + (n.grade || '-') + ')</span>';
-              legendEl.appendChild(li);
-            });
-        }
-
-        function load() {
-          var q = new URLSearchParams();
-          if (engagement) q.set('engagement', engagement);
-          var scanId = scanSelect && scanSelect.value;
-          if (scanId) q.set('scan_id', scanId);
-          fetch('/api/v1/estate?' + q.toString())
-            .then(function (r) { return r.json(); })
-            .then(render)
-            .catch(function (err) {
-              statusEl.textContent = 'Failed to load estate: ' + err;
-            });
-        }
-
-        if (scanSelect) scanSelect.addEventListener('change', load);
-        load();
-      })();
-    </script>
+    <script src="/static/js/app.js" defer></script>
   </body>
 </html>
 {{ end }}

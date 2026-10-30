@@ -1710,16 +1710,66 @@ html.dark .tone-board-indigo dd { color: #a5b4fc; }
 
 .gallery-thumb {
   position: relative;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 4 / 3;
   overflow: hidden;
-  background: var(--surface-3);
+  background: #0f172a;
 }
 
 .gallery-thumb img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   transition: transform 0.35s ease;
+}
+
+.gallery-badge {
+  position: absolute;
+  z-index: 2;
+  top: 0.65rem;
+  left: 0.65rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  background: rgba(30, 64, 175, 0.85);
+  padding: 0.15rem 0.45rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #eff6ff;
+}
+
+.gallery-badge-session {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(6, 95, 70, 0.85);
+  color: #ecfdf5;
+}
+
+.gallery-badge-login {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(146, 64, 14, 0.88);
+  color: #fffbeb;
+}
+
+.gallery-thumb img.is-broken {
+  object-fit: contain;
+  padding: 1rem;
+  opacity: 0.35;
+}
+
+.scan-shot-thumb {
+  display: block;
+  width: 100%;
+  max-height: 10rem;
+  object-fit: cover;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.3));
+  background: var(--surface-3, #e2e8f0);
+}
+
+.scan-shot-thumb.is-broken {
+  min-height: 5rem;
+  object-fit: contain;
+  opacity: 0.4;
 }
 
 .gallery-card:hover .gallery-thumb img {
@@ -1779,30 +1829,43 @@ html.dark .tone-board-indigo dd { color: #a5b4fc; }
 .lightbox {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 80;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 1rem;
-  background: rgba(2, 6, 23, 0.9);
+  background: rgba(2, 6, 23, 0.92);
 }
 
 .lightbox[hidden] {
-  display: none;
+  display: none !important;
+}
+
+.lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-out;
 }
 
 .lightbox-figure {
   position: relative;
   z-index: 10;
-  max-width: 64rem;
+  max-width: min(96vw, 72rem);
+  margin: 0;
 }
 
 .lightbox img {
-  max-height: 85vh;
+  display: block;
+  max-height: 90vh;
+  max-width: 96vw;
   width: auto;
+  height: auto;
   border-radius: 0.85rem;
   border: 1px solid rgba(148, 163, 184, 0.25);
   box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.75);
+  background: #0f172a;
 }
 
 .lightbox-close {
@@ -1857,6 +1920,118 @@ select:focus-visible {
 }
 
 /* ---------- Print styles (report output) ---------- */
+
+/* ---------- Estate risk map ---------- */
+
+.estate-map-wrap {
+  position: relative;
+}
+
+.estate-map-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.3));
+  background: var(--surface-muted, rgba(248, 250, 252, 0.8));
+}
+
+html.dark .estate-map-svg {
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.estate-plot-bg {
+  fill: rgba(148, 163, 184, 0.06);
+}
+
+.estate-grid {
+  stroke: rgba(148, 163, 184, 0.22);
+  stroke-width: 1;
+}
+
+.estate-axis-label {
+  fill: var(--text-muted, #64748b);
+  font-size: 11px;
+}
+
+.estate-node:hover circle {
+  opacity: 1 !important;
+  stroke: var(--text, #0f172a);
+  stroke-width: 2;
+}
+
+.estate-tooltip {
+  position: absolute;
+  z-index: 5;
+  min-width: 12rem;
+  max-width: 18rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.35));
+  background: var(--surface, #ffffff);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--text, #0f172a);
+}
+
+.estate-tooltip strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.estate-sev-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+}
+
+.estate-sev-legend .estate-swatch {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 999px;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+
+.estate-table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.input-sm {
+  min-height: 2rem;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8rem;
+  max-width: 14rem;
+}
+
+.estate-host-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.estate-row.is-selected td {
+  background: rgba(99, 102, 241, 0.08);
+}
 
 @media print {
   body {

@@ -20,6 +20,15 @@ func findingByID(t *testing.T, findings []model.Finding, id string) model.Findin
 	return model.Finding{}
 }
 
+func findingMissing(t *testing.T, findings []model.Finding, id string) {
+	t.Helper()
+	for _, f := range findings {
+		if f.CheckID == id {
+			t.Fatalf("finding %q must not be reported: %+v", id, f)
+		}
+	}
+}
+
 func TestEvaluateInsecureEndpoint(t *testing.T) {
 	svc := &model.ServiceInfo{
 		NegotiatedProtocol: rdp.ProtocolRDP,
@@ -34,7 +43,7 @@ func TestEvaluateInsecureEndpoint(t *testing.T) {
 			Attempted: true,
 			Triggered: true,
 			Reason:    "server answered the MS_T120 check with a Disconnect Provider Ultimatum",
-			Evidence:  "MCS DPUM",
+			Evidence:  "MCS Disconnect Provider Ultimatum (reason 0x0)",
 		},
 	})
 
@@ -58,9 +67,7 @@ func TestEvaluateInsecureEndpoint(t *testing.T) {
 	if f := findingByID(t, findings, "rdp-security-without-tls"); f.Status != model.FindingVulnerable {
 		t.Fatalf("legacy security finding = %+v", f)
 	}
-	if f := findingByID(t, findings, "dejablue-cve-2019-1181-1182"); f.Status != model.FindingPotential {
-		t.Fatalf("dejablue finding = %+v", f)
-	}
+	findingMissing(t, findings, "dejablue-cve-2019-1181-1182")
 	for _, f := range findings {
 		if f.Address != "10.0.0.1" || f.Port != 3389 {
 			t.Fatalf("endpoint not attached: %+v", f)
@@ -68,15 +75,19 @@ func TestEvaluateInsecureEndpoint(t *testing.T) {
 		if f.Remediation == "" {
 			t.Fatalf("finding without remediation: %+v", f)
 		}
+		if f.Status != model.FindingVulnerable && f.Status != model.FindingNotVulnerable {
+			t.Fatalf("speculative status leaked: %+v", f)
+		}
 	}
 }
 
-func TestEvaluateHardenedEndpoint(t *testing.T) {
+func TestEvaluateHardenedEndpointOmitsSpeculativeBlueKeep(t *testing.T) {
 	cert := &model.CertificateInfo{
 		Subject:    "CN=rdp.example.com",
 		Issuer:     "CN=Example CA",
 		NotAfter:   time.Now().Add(365 * 24 * time.Hour),
 		SelfSigned: false,
+		DNSNames:   []string{"rdp.example.com"},
 	}
 	svc := &model.ServiceInfo{
 		NegotiatedProtocol: rdp.ProtocolHybrid,
@@ -86,18 +97,19 @@ func TestEvaluateHardenedEndpoint(t *testing.T) {
 		TLSCipherSuite:     "TLS_AES_256_GCM_SHA384",
 		Certificate:        cert,
 	}
-	findings := Evaluate(model.Endpoint{Address: "10.0.0.2", Port: 3389}, Input{Service: svc})
+	findings := Evaluate(model.Endpoint{Address: "10.0.0.2", Port: 3389}, Input{
+		Service:    svc,
+		TargetHost: "rdp.example.com",
+	})
 
 	for _, f := range findings {
 		if f.Severity != model.SeverityInfo && f.Status == model.FindingVulnerable {
 			t.Fatalf("hardened endpoint must have no vulnerable findings: %+v", f)
 		}
 	}
-	// BlueKeep is always reported and must reflect the NLA mitigation.
-	bluekeep := findingByID(t, findings, "bluekeep-cve-2019-0708")
-	if bluekeep.Status != model.FindingPotential {
-		t.Fatalf("bluekeep finding = %+v", bluekeep)
-	}
+	// NLA blocks the pre-auth probe — do not invent Critical/potential noise.
+	findingMissing(t, findings, "bluekeep-cve-2019-0708")
+	findingMissing(t, findings, "dejablue-cve-2019-1181-1182")
 }
 
 func TestBlueKeepNotVulnerableIsReported(t *testing.T) {
@@ -108,6 +120,7 @@ func TestBlueKeepNotVulnerableIsReported(t *testing.T) {
 			Attempted: true,
 			Triggered: false,
 			Reason:    "no MS_T120 response within 6s",
+			Evidence:  "sent 10 MS_T120 check messages",
 		},
 	})
 	bluekeep := findingByID(t, findings, "bluekeep-cve-2019-0708")
@@ -116,7 +129,7 @@ func TestBlueKeepNotVulnerableIsReported(t *testing.T) {
 	}
 }
 
-func TestBlueKeepInconclusiveWhenProbeSkipped(t *testing.T) {
+func TestBlueKeepSkippedWhenProbeNotAttempted(t *testing.T) {
 	svc := &model.ServiceInfo{NegotiatedProtocol: rdp.ProtocolRDP, EncryptionLevel: "high"}
 	findings := Evaluate(model.Endpoint{Address: "10.0.0.4", Port: 3389}, Input{
 		Service: svc,
@@ -125,29 +138,53 @@ func TestBlueKeepInconclusiveWhenProbeSkipped(t *testing.T) {
 			Reason:    "virtual channel layer unavailable (NLA or legacy encryption)",
 		},
 	})
-	bluekeep := findingByID(t, findings, "bluekeep-cve-2019-0708")
-	if bluekeep.Status != model.FindingInconclusive {
-		t.Fatalf("bluekeep finding = %+v", bluekeep)
-	}
+	findingMissing(t, findings, "bluekeep-cve-2019-0708")
 }
 
-func TestSelfSignedAndExpiringCertificates(t *testing.T) {
+func TestBlueKeepIgnoresUnconfirmedTrigger(t *testing.T) {
+	svc := &model.ServiceInfo{NegotiatedProtocol: rdp.ProtocolRDP}
+	findings := Evaluate(model.Endpoint{Address: "10.0.0.7", Port: 3389}, Input{
+		Service: svc,
+		BlueKeep: &rdp.BlueKeepResult{
+			Attempted: true,
+			Triggered: true,
+			Reason:    "server closed the connection after the check messages",
+			Evidence:  "sent 2 messages",
+		},
+	})
+	findingMissing(t, findings, "bluekeep-cve-2019-0708")
+}
+
+func TestSelfSignedAndExpiredCertificates(t *testing.T) {
 	svc := &model.ServiceInfo{
 		NegotiatedProtocol: rdp.ProtocolSSL,
 		Certificate: &model.CertificateInfo{
 			Subject:    "CN=self",
 			Issuer:     "CN=self",
 			SelfSigned: true,
-			NotAfter:   time.Now().Add(10 * 24 * time.Hour),
+			NotAfter:   time.Now().Add(-24 * time.Hour),
 		},
 	}
 	findings := Evaluate(model.Endpoint{Address: "10.0.0.5", Port: 3389}, Input{Service: svc})
 	if f := findingByID(t, findings, "self-signed-cert"); f.Status != model.FindingVulnerable {
 		t.Fatalf("self-signed finding = %+v", f)
 	}
-	if f := findingByID(t, findings, "expired-cert"); f.Status != model.FindingPotential {
-		t.Fatalf("expiry finding = %+v", f)
+	if f := findingByID(t, findings, "expired-cert"); f.Status != model.FindingVulnerable {
+		t.Fatalf("expired finding = %+v", f)
 	}
+}
+
+func TestExpiringCertificateIsNotReported(t *testing.T) {
+	svc := &model.ServiceInfo{
+		NegotiatedProtocol: rdp.ProtocolSSL,
+		Certificate: &model.CertificateInfo{
+			Subject:  "CN=soon",
+			Issuer:   "CN=CA",
+			NotAfter: time.Now().Add(10 * 24 * time.Hour),
+		},
+	}
+	findings := Evaluate(model.Endpoint{Address: "10.0.0.8", Port: 3389}, Input{Service: svc})
+	findingMissing(t, findings, "expired-cert")
 }
 
 func TestFindingsCarryStableIdentifiers(t *testing.T) {

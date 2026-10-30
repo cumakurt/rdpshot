@@ -36,8 +36,13 @@ type Dependencies struct {
 	// Authenticator performs credential checks; optional and only used when
 	// the scan explicitly enabled it.
 	Authenticator brute.Authenticator
-	// Grabber captures session screenshots; optional.
+	// Grabber captures session screenshots after a verified login; optional.
 	Grabber screenshot.Grabber
+	// LoginScreen captures the pre-auth Winlogon UI over TLS without credentials.
+	LoginScreen screenshot.LoginScreenGrabber
+	// OpenEvidence is retained for wiring compatibility; open-host synthetic
+	// detection cards are no longer persisted by captureOpenHostEvidence.
+	OpenEvidence *screenshot.EvidenceGrabber
 }
 
 // Engine runs scans.
@@ -299,13 +304,18 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 	}
 
 	if len(candidates) == 0 {
+		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger)
 		return
 	}
 	cred, ok := e.auditCredentials(ctx, scan, ep, hostID, candidates, progress, logger)
-	if !ok || !screensEnabled {
+	if ok && screensEnabled {
+		e.captureScreenshot(ctx, scan, ep, hostID, cred, progress, logger)
 		return
 	}
-	e.captureScreenshot(ctx, scan, ep, hostID, cred, progress, logger)
+	// Failed or skipped login: try a real pre-auth Winlogon frame only.
+	if !ok {
+		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger)
+	}
 }
 
 // auditCredentials runs the fail-safe credential audit for one endpoint and
@@ -377,16 +387,100 @@ func (e *Engine) recordSmartCardFinding(scan *model.Scan, ep model.Endpoint, hos
 	e.publish(model.Event{Type: model.EventFinding, ScanID: scan.ID, At: finding.DetectedAt, Payload: finding})
 }
 
+// captureOpenHostEvidence stores a live TLS login-screen capture when Winlogon
+// is reachable without credentials. Synthetic detection-evidence PNGs are not
+// written — if FreeRDP cannot show a real frame, the gallery stays empty for
+// that host (NLA/HYBRID blocked endpoints simply have no screenshot).
+func (e *Engine) captureOpenHostEvidence(ctx context.Context, scan *model.Scan, ep model.Endpoint,
+	hostID int64, svc *model.ServiceInfo, progress *model.Progress, logger *slog.Logger) {
+
+	_ = svc
+	if e.deps.LoginScreen == nil || e.deps.LoginScreen.Available() != nil {
+		return
+	}
+	shot, err := e.deps.LoginScreen.GrabLoginScreen(ctx, ep)
+	if err != nil {
+		logger.Warn("login-screen capture unavailable; skipping screenshot",
+			"error", err.Error())
+		e.log(scan.ID, "warn", fmt.Sprintf("login-screen capture skipped for %s: %v", ep.Key(), err))
+		return
+	}
+	e.persistScreenshot(scan, hostID, shot, progress, logger)
+	e.recordLoginScreenUsers(ctx, scan, ep, hostID, shot.FilePath, progress, logger)
+}
+
+// recordLoginScreenUsers OCRs the Winlogon tile list and persists usernames on
+// the host service info plus an informational finding when any are found.
+func (e *Engine) recordLoginScreenUsers(ctx context.Context, scan *model.Scan, ep model.Endpoint,
+	hostID int64, imagePath string, progress *model.Progress, logger *slog.Logger) {
+
+	users, err := screenshot.ExtractLoginUsersOCR(ctx, imagePath)
+	if err != nil {
+		logger.Warn("login-screen OCR failed", "error", err.Error())
+		e.log(scan.ID, "warn", fmt.Sprintf("login-screen OCR failed for %s: %v", ep.Key(), err))
+		users = nil
+	}
+	host, err := e.deps.Store.GetHost(hostID)
+	if err != nil {
+		logger.Warn("load host for login users", "error", err.Error())
+		return
+	}
+	if host.Service == nil {
+		host.Service = &model.ServiceInfo{}
+	}
+	if host.Service.Evidence == nil {
+		host.Service.Evidence = map[string]string{}
+	}
+	host.Service.Evidence["login_screen"] = "ssl-tls"
+	if len(users) > 0 {
+		host.Service.LoginUsers = users
+		host.Service.Evidence["login_users"] = strings.Join(users, ", ")
+	}
+	host.UpdatedAt = time.Now().UTC()
+	if _, err := e.deps.Store.UpsertHost(host); err != nil {
+		logger.Warn("persist login users", "error", err.Error())
+		return
+	}
+	if len(users) == 0 {
+		return
+	}
+	finding := model.Finding{
+		ScanID: scan.ID, HostID: hostID, Address: ep.Address, Port: ep.Port,
+		CheckID: "rdp-login-users-exposed", Title: "Logon screen exposes local account tiles",
+		Severity: model.SeverityInfo, Status: model.FindingVulnerable,
+		Evidence:    "Winlogon tiles visible without authentication: " + strings.Join(users, ", "),
+		Remediation: "Discourage interactive account enumeration on the logon UI where policy allows; prefer credential prompts without listing local users.",
+		DetectedAt:  time.Now().UTC(),
+	}
+	id, err := e.deps.Store.InsertFinding(finding)
+	if err != nil {
+		logger.Warn("persist login-users finding", "error", err.Error())
+		return
+	}
+	finding.ID = id
+	atomic.AddInt64(&progress.Findings, 1)
+	e.publish(model.Event{Type: model.EventFinding, ScanID: scan.ID, At: finding.DetectedAt, Payload: finding})
+}
+
 // captureScreenshot stores a session image for a verified credential.
 func (e *Engine) captureScreenshot(ctx context.Context, scan *model.Scan, ep model.Endpoint,
 	hostID int64, cred model.Credential, progress *model.Progress, logger *slog.Logger) {
 
+	if e.deps.Grabber == nil {
+		return
+	}
 	shot, err := e.deps.Grabber.Grab(ctx, ep, cred)
 	if err != nil {
 		logger.Warn("screenshot capture failed", "error", err.Error())
 		e.log(scan.ID, "warn", fmt.Sprintf("screenshot capture failed for %s: %v", ep.Key(), err))
 		return
 	}
+	e.persistScreenshot(scan, hostID, shot, progress, logger)
+}
+
+func (e *Engine) persistScreenshot(scan *model.Scan, hostID int64, shot model.Screenshot,
+	progress *model.Progress, logger *slog.Logger) {
+
 	shot.ScanID = scan.ID
 	shot.HostID = hostID
 	id, err := e.deps.Store.InsertScreenshot(shot)

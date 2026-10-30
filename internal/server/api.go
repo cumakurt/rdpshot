@@ -667,7 +667,7 @@ func (s *Server) handleScanFindings(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, findings)
 }
 
-// handleScanHosts returns the probed hosts of one scan.
+// handleScanHosts returns open RDP hosts of one scan (closed/filtered omitted).
 func (s *Server) handleScanHosts(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, ok := s.loadScan(w, r, id); !ok {
@@ -678,6 +678,7 @@ func (s *Server) handleScanHosts(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "load hosts", err)
 		return
 	}
+	hosts = openHostsOnly(hosts)
 	if hosts == nil {
 		hosts = []model.Host{}
 	}

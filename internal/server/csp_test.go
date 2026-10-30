@@ -40,3 +40,29 @@ func TestInlineScriptHashesMatchRenderedPage(t *testing.T) {
 		}
 	}
 }
+
+// TestEstatePageUsesExternalScriptOnly ensures the estate map fetch/render
+// logic is not an inline <script> block. html/template strips JS comments,
+// which breaks CSP hashes computed from template source and leaves the map
+// stuck on "Loading…". Shared head scripts (theme/tailwind) are fine.
+func TestEstatePageUsesExternalScriptOnly(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	var buf bytes.Buffer
+	if err := env.server.tpl.ExecuteTemplate(&buf, "estate", EstateData{
+		Title: "Estate", ActiveNav: "estate",
+	}); err != nil {
+		t.Fatalf("render estate: %v", err)
+	}
+	body := buf.String()
+	if strings.Contains(body, "/api/v1/estate") && !strings.Contains(body, `src="/static/js/app.js"`) {
+		t.Fatal("estate API client must load via /static/js/app.js")
+	}
+	for _, block := range inlineScriptBlocks(body) {
+		if strings.Contains(block, "/api/v1/estate") || strings.Contains(block, "estate-graph") {
+			t.Fatalf("estate map logic must not be inline (CSP comment stripping):\n%s", block)
+		}
+	}
+	if !strings.Contains(body, `id="estate-graph"`) {
+		t.Fatal("estate page missing #estate-graph hook")
+	}
+}

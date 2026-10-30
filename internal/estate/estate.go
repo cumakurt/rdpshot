@@ -47,6 +47,11 @@ func Build(engagement string, hosts []model.Host, findings []model.Finding) Grap
 	}
 	seen := map[string]bool{}
 	for _, h := range hosts {
+		// Closed/filtered endpoints are noise in the Hosts list and map —
+		// only surfaces with an open RDP listener belong in the estate view.
+		if h.State != "open" {
+			continue
+		}
 		key := h.Endpoint.Address + ":" + portStr(h.Endpoint.Port)
 		if seen[key] {
 			continue
@@ -75,7 +80,7 @@ func Build(engagement string, hosts []model.Host, findings []model.Finding) Grap
 		}
 		g.Nodes = append(g.Nodes, Node{
 			ID: key, Address: h.Endpoint.Address, Port: h.Endpoint.Port,
-			Open: h.State == "open", RiskScore: risk, Hardening: hs.Score,
+			Open: true, RiskScore: risk, Hardening: hs.Score,
 			Grade: hs.Grade, NLARequired: nla, TLSVersion: tls,
 			Findings: len(findingByHost[key]), MaxSeverity: maxSev,
 		})

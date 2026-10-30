@@ -1164,17 +1164,322 @@
   /* gallery search fallback: [data-gallery-search]                       */
   /* ------------------------------------------------------------------ */
 
-  function initGallery() {
-    var input = document.querySelector('[data-gallery-search]');
-    if (!input) {
+  /* ------------------------------------------------------------------ */
+  /* estate risk map: #estate-graph                                       */
+  /* ------------------------------------------------------------------ */
+
+  function initEstateMap() {
+    var svg = document.getElementById('estate-graph');
+    if (!svg) {
       return;
     }
 
+    var params = new URLSearchParams(window.location.search);
+    var engagement = params.get('engagement') || '';
+    var scanSelect = document.querySelector('[data-estate-scan]');
+    var statusEl = document.querySelector('[data-estate-status]');
+    var countEl = document.querySelector('[data-estate-count]');
+    var sevLegendEl = document.querySelector('[data-estate-sev-legend]');
+    var tbody = document.querySelector('[data-estate-tbody]');
+    var filterInput = document.querySelector('[data-estate-filter]');
+    var filterSev = document.querySelector('[data-estate-filter-sev]');
+    var tooltip = document.querySelector('[data-estate-tooltip]');
+    var wrap = document.querySelector('.estate-map-wrap');
+    var nodesCache = [];
+    var selectedId = '';
+
+    var PAD = { l: 56, r: 24, t: 28, b: 44 };
+    var W = 960;
+    var H = 420;
+    var PLOT_W = W - PAD.l - PAD.r;
+    var PLOT_H = H - PAD.t - PAD.b;
+
+    function severityColor(sev) {
+      switch ((sev || '').toLowerCase()) {
+        case 'critical': return '#e11d48';
+        case 'high': return '#f97316';
+        case 'medium': return '#ca8a04';
+        case 'low': return '#0284c7';
+        default: return '#64748b';
+      }
+    }
+
+    function severityBadge(sev) {
+      var s = (sev || '').toLowerCase();
+      if (s === 'critical') return 'badge badge-rose';
+      if (s === 'high') return 'badge badge-orange';
+      if (s === 'medium') return 'badge badge-amber';
+      if (s === 'low') return 'badge badge-sky';
+      return 'badge badge-slate';
+    }
+
+    function svgEl(name, attrs) {
+      var el = document.createElementNS('http://www.w3.org/2000/svg', name);
+      Object.keys(attrs || {}).forEach(function (k) { el.setAttribute(k, attrs[k]); });
+      return el;
+    }
+
+    function jitter(seed, span) {
+      var x = Math.sin(seed * 12.9898) * 43758.5453;
+      return (x - Math.floor(x) - 0.5) * span;
+    }
+
+    function plotXY(n, i) {
+      var harden = typeof n.hardening_score === 'number' ? n.hardening_score : 50;
+      var risk = n.risk_score || 0;
+      var maxRisk = 1;
+      nodesCache.forEach(function (o) {
+        if ((o.risk_score || 0) > maxRisk) maxRisk = o.risk_score;
+      });
+      var x = PAD.l + (Math.max(0, Math.min(100, harden)) / 100) * PLOT_W;
+      var y = PAD.t + (1 - Math.max(0, Math.min(1, risk / maxRisk))) * PLOT_H;
+      x += jitter(i + 1, 10);
+      y += jitter(i + 17, 8);
+      x = Math.max(PAD.l + 8, Math.min(W - PAD.r - 8, x));
+      y = Math.max(PAD.t + 8, Math.min(H - PAD.b - 8, y));
+      return { x: x, y: y };
+    }
+
+    function bubbleRadius(n) {
+      if (!n.open) return 5;
+      var f = n.findings || 0;
+      return 7 + Math.min(18, f * 2 + (n.risk_score || 0) * 0.6);
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function cssEscape(value) {
+      if (window.CSS && typeof window.CSS.escape === 'function') {
+        return window.CSS.escape(value);
+      }
+      return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+    }
+
+    function showTooltip(n, clientX, clientY) {
+      if (!tooltip || !wrap) return;
+      tooltip.classList.remove('hidden');
+      tooltip.innerHTML =
+        '<strong>' + escapeHtml(n.id) + '</strong>' +
+        '<span>' + (n.open ? 'open' : 'closed') +
+        (n.max_severity ? ' · ' + escapeHtml(n.max_severity) : '') + '</span>' +
+        '<span>Risk ' + (n.risk_score || 0) + ' · Harden ' + (n.hardening_score || 0) +
+        ' (' + escapeHtml(n.grade || '-') + ')</span>' +
+        '<span>Findings ' + (n.findings || 0) +
+        (n.tls_version ? ' · ' + escapeHtml(n.tls_version) : '') +
+        (n.nla_required ? ' · NLA' : '') + '</span>';
+      var rect = wrap.getBoundingClientRect();
+      var left = clientX - rect.left + 12;
+      var top = clientY - rect.top + 12;
+      if (left + 220 > rect.width) left = clientX - rect.left - 230;
+      if (top + 100 > rect.height) top = clientY - rect.top - 110;
+      tooltip.style.left = Math.max(8, left) + 'px';
+      tooltip.style.top = Math.max(8, top) + 'px';
+    }
+
+    function hideTooltip() {
+      if (tooltip) tooltip.classList.add('hidden');
+    }
+
+    function renderAxes() {
+      svg.appendChild(svgEl('rect', {
+        x: PAD.l, y: PAD.t, width: PLOT_W, height: PLOT_H,
+        class: 'estate-plot-bg', rx: '8'
+      }));
+      for (var g = 0; g <= 4; g++) {
+        var gx = PAD.l + (g / 4) * PLOT_W;
+        var gy = PAD.t + (g / 4) * PLOT_H;
+        svg.appendChild(svgEl('line', {
+          x1: gx, y1: PAD.t, x2: gx, y2: PAD.t + PLOT_H, class: 'estate-grid'
+        }));
+        svg.appendChild(svgEl('line', {
+          x1: PAD.l, y1: gy, x2: PAD.l + PLOT_W, y2: gy, class: 'estate-grid'
+        }));
+      }
+      var xLabel = svgEl('text', {
+        x: PAD.l + PLOT_W / 2, y: H - 10, 'text-anchor': 'middle', class: 'estate-axis-label'
+      });
+      xLabel.textContent = 'Hardening score →';
+      svg.appendChild(xLabel);
+      var yLabel = svgEl('text', {
+        x: 16, y: PAD.t + PLOT_H / 2, 'text-anchor': 'middle', class: 'estate-axis-label',
+        transform: 'rotate(-90 16 ' + (PAD.t + PLOT_H / 2) + ')'
+      });
+      yLabel.textContent = '← Higher risk';
+      svg.appendChild(yLabel);
+    }
+
+    function renderMap(nodes) {
+      nodes = (nodes || []).filter(function (n) { return n.open; });
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      renderAxes();
+      var ordered = nodes.slice().sort(function (a, b) {
+        return (a.risk_score || 0) - (b.risk_score || 0);
+      });
+      ordered.forEach(function (n, idx) {
+        var i = nodes.indexOf(n);
+        var pt = plotXY(n, i >= 0 ? i : idx);
+        var r = bubbleRadius(n);
+        var g = svgEl('g', {
+          class: 'estate-node' + (n.id === selectedId ? ' is-selected' : ''),
+          'data-node-id': n.id,
+          style: 'cursor:pointer'
+        });
+        var circle = svgEl('circle', {
+          cx: pt.x, cy: pt.y, r: r,
+          fill: n.open ? severityColor(n.max_severity || 'info') : '#94a3b8',
+          opacity: n.open ? '0.88' : '0.45',
+          stroke: n.id === selectedId ? 'var(--text)' : 'transparent',
+          'stroke-width': n.id === selectedId ? '2.5' : '0'
+        });
+        g.appendChild(circle);
+        g.addEventListener('mouseenter', function (ev) { showTooltip(n, ev.clientX, ev.clientY); });
+        g.addEventListener('mousemove', function (ev) { showTooltip(n, ev.clientX, ev.clientY); });
+        g.addEventListener('mouseleave', hideTooltip);
+        g.addEventListener('click', function () {
+          selectedId = n.id;
+          renderMap(nodesCache);
+          renderTable();
+          var row = tbody.querySelector('[data-row-id="' + cssEscape(n.id) + '"]');
+          if (row) {
+            row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          }
+        });
+        svg.appendChild(g);
+      });
+    }
+
+    function nodeMatchesFilters(n) {
+      var q = (filterInput && filterInput.value || '').trim().toLowerCase();
+      if (q && String(n.id).toLowerCase().indexOf(q) < 0 &&
+          String(n.address).toLowerCase().indexOf(q) < 0) {
+        return false;
+      }
+      var sev = (filterSev && filterSev.value || '').toLowerCase();
+      if (!sev) return true;
+      if (sev === 'none') return !n.max_severity;
+      return (n.max_severity || '').toLowerCase() === sev;
+    }
+
+    function renderTable() {
+      if (!tbody) return;
+      // API already omits closed RDP endpoints; keep a client guard as well.
+      var rows = nodesCache.filter(function (n) { return n.open; }).filter(nodeMatchesFilters).sort(function (a, b) {
+        return (b.risk_score || 0) - (a.risk_score || 0);
+      });
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No open RDP hosts match this filter.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(function (n) {
+        var sev = n.max_severity || '—';
+        var cls = n.id === selectedId ? ' is-selected' : '';
+        return '<tr class="estate-row' + cls + '" data-row-id="' + escapeHtml(n.id) + '">' +
+          '<td class="cell-mono"><button type="button" class="estate-host-btn" data-select="' +
+            escapeHtml(n.id) + '">' + escapeHtml(n.id) + '</button></td>' +
+          '<td><span class="badge badge-emerald">open</span></td>' +
+          '<td><span class="' + severityBadge(n.max_severity) + '">' + escapeHtml(sev) + '</span></td>' +
+          '<td class="cell-mono">' + (n.findings || 0) + '</td>' +
+          '<td class="cell-mono">' + (n.risk_score || 0) + '</td>' +
+          '<td class="cell-mono">' + (n.hardening_score || 0) + ' <span class="text-subtle">(' +
+            escapeHtml(n.grade || '-') + ')</span></td>' +
+          '<td class="cell-mono text-sm">' +
+            (n.nla_required ? 'NLA' : 'no NLA') +
+            (n.tls_version ? ' · ' + escapeHtml(n.tls_version) : '') +
+          '</td></tr>';
+      }).join('');
+    }
+
+    function renderSevLegend(nodes) {
+      if (!sevLegendEl) return;
+      var counts = { critical: 0, high: 0, medium: 0, low: 0, none: 0 };
+      nodes.forEach(function (n) {
+        if (!n.open) return;
+        var s = (n.max_severity || '').toLowerCase();
+        if (counts[s] != null) counts[s]++;
+        else counts.none++;
+      });
+      sevLegendEl.innerHTML = ['critical', 'high', 'medium', 'low', 'none'].map(function (k) {
+        var label = k === 'none' ? 'open · no findings' : k;
+        return '<li><span class="estate-swatch" style="background:' +
+          (k === 'none' ? '#94a3b8' : severityColor(k)) +
+          '"></span>' + label + ' <strong>' + counts[k] + '</strong></li>';
+      }).join('');
+    }
+
+    function render(graph) {
+      nodesCache = (graph.nodes || []).filter(function (n) { return n.open; });
+      if (countEl) countEl.textContent = nodesCache.length + ' nodes';
+      if (!nodesCache.length) {
+        if (statusEl) statusEl.textContent = 'No open RDP hosts in this estate yet.';
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No open RDP hosts in this estate yet.</td></tr>';
+        if (sevLegendEl) sevLegendEl.innerHTML = '';
+        return;
+      }
+      if (statusEl) {
+        statusEl.textContent = (graph.engagement ? 'Engagement: ' + graph.engagement + ' · ' : '') +
+          nodesCache.length + ' open RDP hosts · hover bubbles for details · click to select';
+      }
+      renderSevLegend(nodesCache);
+      renderMap(nodesCache);
+      renderTable();
+    }
+
+    function load() {
+      var q = new URLSearchParams();
+      if (engagement) q.set('engagement', engagement);
+      var scanId = scanSelect && scanSelect.value;
+      if (scanId) q.set('scan_id', scanId);
+      if (statusEl) statusEl.textContent = 'Loading estate graph…';
+      fetch('/api/v1/estate?' + q.toString())
+        .then(function (r) {
+          if (!r.ok) {
+            throw new Error('HTTP ' + r.status);
+          }
+          return r.json();
+        })
+        .then(render)
+        .catch(function (err) {
+          if (statusEl) statusEl.textContent = 'Failed to load estate: ' + err;
+          if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Failed to load estate data.</td></tr>';
+        });
+    }
+
+    if (scanSelect) {
+      var preselect = params.get('scan_id') || '';
+      if (preselect) scanSelect.value = preselect;
+      scanSelect.addEventListener('change', load);
+    }
+    if (filterInput) filterInput.addEventListener('input', renderTable);
+    if (filterSev) filterSev.addEventListener('change', renderTable);
+    if (tbody) {
+      tbody.addEventListener('click', function (ev) {
+        var btn = ev.target.closest('[data-select]');
+        if (!btn) return;
+        selectedId = btn.getAttribute('data-select');
+        renderMap(nodesCache);
+        renderTable();
+      });
+    }
+    load();
+  }
+
+  function initGallery() {
     var items = document.querySelectorAll('[data-gallery-item]');
+    var input = document.querySelector('[data-gallery-search]');
     var counter = document.getElementById('gallery-count');
     var noMatch = document.getElementById('gallery-no-match');
+    var lightbox = document.getElementById('gallery-lightbox');
+    var lightboxImage = document.getElementById('gallery-lightbox-image');
 
     function applyFilter() {
+      if (!input) {
+        return;
+      }
       var query = input.value.trim().toLowerCase();
       var visible = 0;
 
@@ -1192,16 +1497,71 @@
 
       if (counter) {
         counter.textContent = query ?
-          visible + ' of ' + items.length + ' sessions match' :
-          items.length + ' sessions captured';
+          visible + ' of ' + items.length + ' items match' :
+          items.length + ' items captured';
       }
       if (noMatch) {
         noMatch.classList.toggle('hidden', visible > 0);
       }
     }
 
-    input.addEventListener('input', applyFilter);
-    input.addEventListener('search', applyFilter);
+    if (input) {
+      input.addEventListener('input', applyFilter);
+      input.addEventListener('search', applyFilter);
+    }
+
+    function closeLightbox() {
+      if (!lightbox || !lightboxImage) {
+        return;
+      }
+      lightbox.hidden = true;
+      lightboxImage.removeAttribute('src');
+      document.body.style.overflow = '';
+    }
+
+    function openLightbox(src, alt) {
+      if (!lightbox || !lightboxImage || !src) {
+        return;
+      }
+      lightboxImage.src = src;
+      lightboxImage.alt = alt || 'Fullscreen evidence image';
+      lightbox.hidden = false;
+      document.body.style.overflow = 'hidden';
+    }
+
+    if (lightbox && lightboxImage) {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-lightbox-open]'), function (btn) {
+        btn.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          openLightbox(btn.getAttribute('data-full-src'), btn.getAttribute('data-alt'));
+        });
+      });
+
+      Array.prototype.forEach.call(document.querySelectorAll('[data-gallery-image]'), function (img) {
+        img.addEventListener('click', function () {
+          var btn = img.closest('[data-gallery-item]');
+          var opener = btn ? btn.querySelector('[data-lightbox-open]') : null;
+          var src = opener ? opener.getAttribute('data-full-src') : img.getAttribute('src');
+          var alt = opener ? opener.getAttribute('data-alt') : img.getAttribute('alt');
+          openLightbox(src, alt);
+        });
+        img.style.cursor = 'zoom-in';
+      });
+
+      Array.prototype.forEach.call(document.querySelectorAll('[data-lightbox-close]'), function (el) {
+        el.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          closeLightbox();
+        });
+      });
+
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape' && lightbox && !lightbox.hidden) {
+          closeLightbox();
+        }
+      });
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -2198,5 +2558,6 @@
     initSIEMForm();
     initAdminPanels();
     initGallery();
+    initEstateMap();
   });
 })();

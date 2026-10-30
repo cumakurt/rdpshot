@@ -11,44 +11,53 @@
         <div>
           <p class="page-eyebrow">Evidence</p>
           <h1 class="page-title mt-1">Visual Session Vault</h1>
-          <p class="page-subtitle">Screenshots captured from authenticated RDP sessions.</p>
+          <p class="page-subtitle">Real pre-auth login screens (TLS) and live desktop captures after a verified login. Synthetic detection cards are omitted.</p>
         </div>
         <div class="w-full max-w-md">
-          <label for="gallery-search" class="label">Search sessions</label>
+          <label for="gallery-search" class="label">Search evidence</label>
           <input id="gallery-search" type="search" data-gallery-search
             placeholder="Filter by IP address or username&hellip;"
             class="input">
-          <p id="gallery-count" class="mt-1 text-xs text-subtle">{{ len .Items }} sessions captured</p>
+          <p id="gallery-count" class="mt-1 text-xs text-subtle">{{ len .Items }} items captured</p>
         </div>
       </section>
 
       {{ if .Items }}
-      <section class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="Session screenshots">
+      <section class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="Evidence gallery">
         {{ range .Items }}
         <figure class="gallery-card" data-gallery-item data-address="{{ .Address }}" data-username="{{ .Username }}">
           <div class="gallery-thumb">
+            {{ if eq .Username "rdp-open" }}
+            <span class="gallery-badge">Detection</span>
+            {{ else if eq .Username "rdp-login" }}
+            <span class="gallery-badge gallery-badge-login">Login screen</span>
+            {{ else }}
+            <span class="gallery-badge gallery-badge-session">Session</span>
+            {{ end }}
             <img src="{{ .FilePath }}"
-              alt="RDP session screenshot captured from {{ .Address }}:{{ .Port }}"
-              loading="lazy">
+              alt="{{ if eq .Username "rdp-open" }}Detection evidence for {{ .Address }}:{{ .Port }}{{ else if eq .Username "rdp-login" }}Pre-auth login screen for {{ .Address }}:{{ .Port }}{{ else }}RDP session screenshot from {{ .Address }}:{{ .Port }}{{ end }}"
+              loading="lazy"
+              data-gallery-image
+              onerror="this.classList.add('is-broken'); this.alt='Image missing on disk';">
             <div class="gallery-overlay">
               <button type="button" class="btn btn-primary btn-sm" data-lightbox-open
                 data-full-src="{{ .FilePath }}"
-                data-alt="RDP session screenshot captured from {{ .Address }}:{{ .Port }}">
+                data-alt="{{ if eq .Username "rdp-open" }}Detection evidence for {{ .Address }}:{{ .Port }}{{ else if eq .Username "rdp-login" }}Pre-auth login screen for {{ .Address }}:{{ .Port }}{{ else }}RDP session screenshot from {{ .Address }}:{{ .Port }}{{ end }}">
                 View Fullscreen
               </button>
-              <span class="gallery-dim">{{ .Width }}x{{ .Height }}</span>
+              <span class="gallery-dim">{{ if and .Width .Height }}{{ .Width }}x{{ .Height }}{{ else }}—{{ end }}</span>
             </div>
           </div>
           <figcaption class="gallery-caption">
             <p class="gallery-title">{{ .Address }}:{{ .Port }}</p>
-            <p class="gallery-meta">user: <span class="text-strong">{{ .Username }}</span></p>
+            <p class="gallery-meta">{{ if eq .Username "rdp-open" }}NLA/TLS blocked pre-auth UI · evidence only{{ else if eq .Username "rdp-login" }}login screen · no credential{{ else }}user: <span class="text-strong">{{ .Username }}</span>{{ end }}</p>
             <p class="gallery-note">{{ .CapturedAt.Format "2006-01-02 15:04:05" }}</p>
           </figcaption>
         </figure>
         {{ end }}
       </section>
       <p id="gallery-no-match" class="hidden text-center text-sm text-subtle">
-        No sessions match your filter.
+        No items match your filter.
       </p>
       {{ else }}
       <section class="card">
@@ -58,17 +67,17 @@
             <path d="M8 7l1.5-2.5h5L16 7"></path>
             <circle cx="12" cy="13.5" r="3"></circle>
           </svg>
-          <p>No session screenshots captured yet</p>
+          <p>No evidence images captured yet</p>
           <a href="/" class="btn btn-ghost btn-sm">Start a scan with screenshots enabled</a>
         </div>
       </section>
       {{ end }}
 
       <div id="gallery-lightbox" class="lightbox" role="dialog" aria-modal="true"
-        aria-label="Fullscreen session screenshot" hidden>
-        <button type="button" class="absolute inset-0 cursor-default" aria-label="Close fullscreen preview" data-lightbox-close></button>
+        aria-label="Fullscreen evidence image" hidden>
+        <button type="button" class="lightbox-backdrop" aria-label="Close fullscreen preview" data-lightbox-close></button>
         <figure class="lightbox-figure">
-          <img id="gallery-lightbox-image" alt="Fullscreen RDP session screenshot">
+          <img id="gallery-lightbox-image" alt="Fullscreen evidence image">
           <button type="button" class="lightbox-close" data-lightbox-close>Close</button>
         </figure>
       </div>

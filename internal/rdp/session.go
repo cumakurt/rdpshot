@@ -325,8 +325,8 @@ sendLoop:
 			sent++
 		}
 	}
-	if sent == 0 {
-		result.Reason = "probe send failed"
+	if sent < len(payloads) {
+		result.Reason = "probe send failed before a full MS_T120 check pair was delivered"
 		return result
 	}
 	result.Evidence = fmt.Sprintf("sent %d MS_T120 check messages (sizes 0x%x and 0x%x) on channel %d",
@@ -342,6 +342,7 @@ sendLoop:
 		if err != nil {
 			switch {
 			case errors.Is(err, ErrDisconnected):
+				// A bare TCP close is not a confirmed BlueKeep signal.
 				result.Reason = "server closed the connection after the check messages"
 			case isTimeout(err):
 				result.Reason = fmt.Sprintf("no MS_T120 response within %s", s.opts.ProbeTimeout)
@@ -355,6 +356,8 @@ sendLoop:
 		if err != nil {
 			continue
 		}
+		// Only an MCS Disconnect Provider Ultimatum after a full check pair is
+		// treated as a confirmed vulnerable signal.
 		if pdu.Type == mcsDisconnectProvider {
 			result.Triggered = true
 			result.Reason = "server answered the MS_T120 check with a Disconnect Provider Ultimatum"

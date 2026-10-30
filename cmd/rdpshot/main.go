@@ -332,13 +332,20 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	defer hub.Close()
 
 	authenticator := auth.BruteAdapter{Inner: auth.NewCredSSPAuthenticator(cfg.Timeout)}
-	grabber := screenshot.NewAutoGrabber(filepath.Join(cfg.OutputsDir, "screenshots"), logger)
+	shotDir := filepath.Join(cfg.OutputsDir, "screenshots")
+	evidence := screenshot.NewEvidenceGrabber(shotDir)
+	freerdp := screenshot.NewXFreeRDPGrabber(shotDir)
+	grabber := screenshot.NewAutoGrabber(shotDir, logger)
+	grabber.Primary = freerdp
+	grabber.Fallback = evidence
 	engine := scanner.New(scanner.Dependencies{
 		Store:         st,
 		Hub:           hub,
 		Logger:        logger,
 		Authenticator: authenticator,
 		Grabber:       grabber,
+		LoginScreen:   freerdp,
+		OpenEvidence:  evidence,
 	})
 
 	scanName := *name
@@ -505,6 +512,12 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "rdpshot serve: %v\n", err)
 		return exitUsage
 	}
+	if absOut, err := filepath.Abs(cfg.OutputsDir); err == nil {
+		cfg.OutputsDir = absOut
+	}
+	if absDB, err := filepath.Abs(cfg.DBPath); err == nil {
+		cfg.DBPath = absDB
+	}
 
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
@@ -518,13 +531,24 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	defer hub.Close()
 
 	authenticator := auth.BruteAdapter{Inner: auth.NewCredSSPAuthenticator(cfg.Timeout)}
-	grabber := screenshot.NewAutoGrabber(filepath.Join(cfg.OutputsDir, "screenshots"), logger)
+	shotDir := filepath.Join(cfg.OutputsDir, "screenshots")
+	if err := os.MkdirAll(shotDir, 0o700); err != nil {
+		fmt.Fprintf(stderr, "rdpshot serve: create screenshots dir: %v\n", err)
+		return exitError
+	}
+	evidence := screenshot.NewEvidenceGrabber(shotDir)
+	freerdp := screenshot.NewXFreeRDPGrabber(shotDir)
+	grabber := screenshot.NewAutoGrabber(shotDir, logger)
+	grabber.Primary = freerdp
+	grabber.Fallback = evidence
 	engine := scanner.New(scanner.Dependencies{
 		Store:         st,
 		Hub:           hub,
 		Logger:        logger,
 		Authenticator: authenticator,
 		Grabber:       grabber,
+		LoginScreen:   freerdp,
+		OpenEvidence:  evidence,
 	})
 
 	srv, err := server.New(server.Config{

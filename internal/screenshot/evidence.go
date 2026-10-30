@@ -17,11 +17,15 @@ import (
 const (
 	evidenceWidth  = 1024
 	evidenceHeight = 768
+	// OpenHostLabel marks synthetic open-host detection cards. These are no
+	// longer persisted by the scanner; the constant remains for filtering
+	// legacy gallery rows and unit tests of GrabOpenHost.
+	OpenHostLabel = "rdp-open"
 )
 
-// EvidenceGrabber is a pure-Go fallback that writes a labelled session-evidence
-// PNG after a verified login. It is not a desktop framebuffer dump: the card
-// records that authentication succeeded when FreeRDP/Xvfb are unavailable.
+// EvidenceGrabber is a pure-Go grabber that writes labelled PNG evidence cards.
+// It is the post-login fallback when FreeRDP/framebuffer cannot produce a live
+// desktop frame after a verified credential.
 type EvidenceGrabber struct {
 	OutputDir string
 }
@@ -38,6 +42,21 @@ func (g *EvidenceGrabber) Available() error {
 
 // Grab writes a session-evidence PNG for the verified credential.
 func (g *EvidenceGrabber) Grab(ctx context.Context, ep model.Endpoint, cred model.Credential) (model.Screenshot, error) {
+	return g.writeCard(ctx, ep, cred.Username, func(at time.Time) image.Image {
+		return renderVerifiedEvidenceCard(ep, cred, at)
+	})
+}
+
+// GrabOpenHost writes a detection evidence PNG for an open RDP endpoint.
+// Retained for tests and tooling; the scanner no longer calls this path so the
+// gallery only shows real Winlogon / desktop frames.
+func (g *EvidenceGrabber) GrabOpenHost(ctx context.Context, ep model.Endpoint, svc *model.ServiceInfo) (model.Screenshot, error) {
+	return g.writeCard(ctx, ep, OpenHostLabel, func(at time.Time) image.Image {
+		return renderOpenHostEvidenceCard(ep, svc, at)
+	})
+}
+
+func (g *EvidenceGrabber) writeCard(ctx context.Context, ep model.Endpoint, label string, render func(time.Time) image.Image) (model.Screenshot, error) {
 	var shot model.Screenshot
 	if err := ctx.Err(); err != nil {
 		return shot, err
@@ -47,10 +66,10 @@ func (g *EvidenceGrabber) Grab(ctx context.Context, ep model.Endpoint, cred mode
 	}
 
 	now := time.Now().UTC()
-	name := FileName(ep, cred.Username, now)
+	name := FileName(ep, label, now)
 	outPath := filepath.Join(g.OutputDir, name)
 
-	img := renderEvidenceCard(ep, cred, now)
+	img := render(now)
 	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return shot, fmt.Errorf("screenshot: create evidence image: %w", err)
@@ -67,7 +86,7 @@ func (g *EvidenceGrabber) Grab(ctx context.Context, ep model.Endpoint, cred mode
 	return model.Screenshot{
 		Address:    ep.Address,
 		Port:       ep.Port,
-		Username:   cred.Username,
+		Username:   label,
 		FilePath:   outPath,
 		Width:      evidenceWidth,
 		Height:     evidenceHeight,
@@ -75,27 +94,95 @@ func (g *EvidenceGrabber) Grab(ctx context.Context, ep model.Endpoint, cred mode
 	}, nil
 }
 
-func renderEvidenceCard(ep model.Endpoint, cred model.Credential, at time.Time) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, evidenceWidth, evidenceHeight))
-	bg := color.RGBA{R: 15, G: 23, B: 42, A: 255}      // slate-900
-	panel := color.RGBA{R: 30, G: 41, B: 59, A: 255}   // slate-800
-	accent := color.RGBA{R: 16, G: 185, B: 129, A: 255} // emerald-500
-	text := color.RGBA{R: 226, G: 232, B: 240, A: 255}  // slate-200
-	muted := color.RGBA{R: 148, G: 163, B: 184, A: 255} // slate-400
+func renderVerifiedEvidenceCard(ep model.Endpoint, cred model.Credential, at time.Time) image.Image {
+	img, text, muted := newEvidenceCanvas(color.RGBA{R: 16, G: 185, B: 129, A: 255}) // emerald
+	drawBitmap(img, 80, 120, "RDPShot session evidence", text, 3)
+	drawBitmap(img, 80, 175, "Authentication verified - desktop capture tooling unavailable", muted, 2)
+	drawBitmap(img, 80, 260, fmt.Sprintf("Host      %s:%d", ep.Address, ep.Port), text, 2)
+	drawBitmap(img, 80, 310, fmt.Sprintf("User      %s", displayUser(cred)), text, 2)
+	drawBitmap(img, 80, 360, fmt.Sprintf("Method    %s", fallback(cred.Method, "nla")), text, 2)
+	drawBitmap(img, 80, 410, fmt.Sprintf("Captured  %s", at.Format(time.RFC3339)), text, 2)
+	drawBitmap(img, 80, 500, "This image is a pure-Go evidence card, not a framebuffer dump.", muted, 2)
+	drawBitmap(img, 80, 550, "Install FreeRDP + Xvfb + ImageMagick/ffmpeg for live screenshots.", muted, 2)
+	return img
+}
 
+func renderOpenHostEvidenceCard(ep model.Endpoint, svc *model.ServiceInfo, at time.Time) image.Image {
+	img, text, muted := newEvidenceCanvas(color.RGBA{R: 59, G: 130, B: 246, A: 255}) // blue
+	drawBitmap(img, 80, 120, "RDPShot detection evidence", text, 3)
+	nla := svc != nil && svc.NLARequired
+	if nla {
+		drawBitmap(img, 80, 175, "Pre-auth login UI blocked - server requires CredSSP/NLA", muted, 2)
+	} else {
+		drawBitmap(img, 80, 175, "RDP open - login-screen capture unavailable on this host", muted, 2)
+	}
+	drawBitmap(img, 80, 260, fmt.Sprintf("Host      %s:%d", ep.Address, ep.Port), text, 2)
+	drawBitmap(img, 80, 310, fmt.Sprintf("NLA       %s", boolLabel(nla)), text, 2)
+	drawBitmap(img, 80, 360, fmt.Sprintf("TLS       %s", openHostTLS(svc)), text, 2)
+	drawBitmap(img, 80, 410, fmt.Sprintf("Cert      %s", openHostCert(svc)), text, 2)
+	drawBitmap(img, 80, 460, fmt.Sprintf("OS guess  %s", openHostOS(svc)), text, 2)
+	drawBitmap(img, 80, 510, fmt.Sprintf("Captured  %s", at.Format(time.RFC3339)), text, 2)
+	if nla {
+		drawBitmap(img, 80, 590, "HYBRID_REQUIRED: TLS-only clients cannot reach Winlogon.", muted, 2)
+		drawBitmap(img, 80, 640, "Use a verified credential for a live desktop screenshot.", muted, 2)
+	} else {
+		drawBitmap(img, 80, 590, "Install FreeRDP + Xvfb + ImageMagick for login-screen grabs.", muted, 2)
+		drawBitmap(img, 80, 640, "Live desktop screenshots still require a verified credential.", muted, 2)
+	}
+	return img
+}
+
+func newEvidenceCanvas(accent color.RGBA) (*image.RGBA, color.RGBA, color.RGBA) {
+	img := image.NewRGBA(image.Rect(0, 0, evidenceWidth, evidenceHeight))
+	bg := color.RGBA{R: 15, G: 23, B: 42, A: 255}
+	panel := color.RGBA{R: 30, G: 41, B: 59, A: 255}
+	text := color.RGBA{R: 226, G: 232, B: 240, A: 255}
+	muted := color.RGBA{R: 148, G: 163, B: 184, A: 255}
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: bg}, image.Point{}, draw.Src)
 	draw.Draw(img, image.Rect(64, 96, evidenceWidth-64, evidenceHeight-96), &image.Uniform{C: panel}, image.Point{}, draw.Src)
 	draw.Draw(img, image.Rect(64, 96, 72, evidenceHeight-96), &image.Uniform{C: accent}, image.Point{}, draw.Src)
+	return img, text, muted
+}
 
-	drawBitmap(img, 96, 140, "RDPShot session evidence", text, 2)
-	drawBitmap(img, 96, 190, "Authentication verified - desktop capture tooling unavailable", muted, 1)
-	drawBitmap(img, 96, 260, fmt.Sprintf("Host      %s:%d", ep.Address, ep.Port), text, 1)
-	drawBitmap(img, 96, 300, fmt.Sprintf("User      %s", displayUser(cred)), text, 1)
-	drawBitmap(img, 96, 340, fmt.Sprintf("Method    %s", fallback(cred.Method, "nla")), text, 1)
-	drawBitmap(img, 96, 380, fmt.Sprintf("Captured  %s", at.Format(time.RFC3339)), text, 1)
-	drawBitmap(img, 96, 460, "This image is a pure-Go evidence card, not a framebuffer dump.", muted, 1)
-	drawBitmap(img, 96, 500, "Install FreeRDP + Xvfb + ImageMagick/ffmpeg for live screenshots.", muted, 1)
-	return img
+func boolLabel(v bool) string {
+	if v {
+		return "required"
+	}
+	return "not required / unknown"
+}
+
+func openHostTLS(svc *model.ServiceInfo) string {
+	if svc == nil || svc.TLSVersion == "" {
+		return "n/a"
+	}
+	if svc.TLSCipherSuite != "" {
+		return svc.TLSVersion + " / " + svc.TLSCipherSuite
+	}
+	return svc.TLSVersion
+}
+
+func openHostCert(svc *model.ServiceInfo) string {
+	if svc == nil || svc.Certificate == nil {
+		return "n/a"
+	}
+	sub := svc.Certificate.Subject
+	if sub == "" {
+		sub = "present"
+	}
+	if len(sub) > 48 {
+		sub = sub[:45] + "..."
+	}
+	if svc.Certificate.SelfSigned {
+		return sub + " (self-signed)"
+	}
+	return sub
+}
+
+func openHostOS(svc *model.ServiceInfo) string {
+	if svc == nil || svc.OSGuess == "" {
+		return "n/a"
+	}
+	return svc.OSGuess
 }
 
 func displayUser(cred model.Credential) string {

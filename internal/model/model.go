@@ -246,6 +246,9 @@ type ServiceInfo struct {
 	KerberosOffered bool `json:"kerberos_offered,omitempty"`
 	// SmartCardRequired is set when CredSSP/NLA indicates smart-card logon.
 	SmartCardRequired bool `json:"smart_card_required,omitempty"`
+	// LoginUsers are account tiles observed on the pre-auth Winlogon UI
+	// (OCR from a TLS login-screen capture). Best-effort; may be empty.
+	LoginUsers []string `json:"login_users,omitempty"`
 }
 
 // Host is one probed endpoint within a scan.

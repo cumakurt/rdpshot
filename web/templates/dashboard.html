@@ -85,6 +85,13 @@
             <p class="card-hint">Launch an authorized RDP audit against your own infrastructure.</p>
 
             <form id="quick-scan-form" method="post" action="/api/v1/scans" enctype="multipart/form-data" class="form-stack mt-5">
+              <div class="field">
+                <label for="scan-name" class="label">Scan name</label>
+                <input id="scan-name" name="name" type="text" required maxlength="200"
+                  placeholder="e.g. Lab perimeter audit" class="input" autocomplete="off" spellcheck="false">
+                <p class="wordlist-hint">Shown on the Scans list and reports. Required.</p>
+              </div>
+
               <div class="field" data-targets-field>
                 <label for="scan-targets" class="label">Targets</label>
                 <textarea id="scan-targets" name="targets" rows="3"

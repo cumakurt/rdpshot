@@ -241,11 +241,16 @@
             </div>
             <div class="card-body">
               {{ if .Screens }}
-              <ul class="space-y-2">
+              <ul class="space-y-3">
                 {{ range .Screens }}
                 <li class="item-tile">
-                  <p class="item-title">{{ .Address }}:{{ .Port }}</p>
-                  <p class="item-meta">user: {{ .Username }} · {{ .Width }}x{{ .Height }}</p>
+                  <a href="{{ .FilePath }}" target="_blank" rel="noopener" class="block">
+                    <img src="{{ .FilePath }}" alt="Screenshot {{ .Address }}:{{ .Port }}"
+                      class="scan-shot-thumb" loading="lazy"
+                      onerror="this.classList.add('is-broken')">
+                  </a>
+                  <p class="item-title mt-2">{{ .Address }}:{{ .Port }}</p>
+                  <p class="item-meta">{{ if eq .Username "rdp-login" }}login screen{{ else if eq .Username "rdp-open" }}detection evidence{{ else }}user: {{ .Username }}{{ end }}{{ if and .Width .Height }} · {{ .Width }}x{{ .Height }}{{ end }}</p>
                   <p class="item-note">Captured {{ .CapturedAt.Format "2006-01-02 15:04:05" }}</p>
                 </li>
                 {{ end }}
@@ -277,6 +282,7 @@
                   <th>TLS</th>
                   <th>Cert Subject</th>
                   <th>OS Guess</th>
+                  <th>Login users</th>
                 </tr>
               </thead>
               <tbody>
@@ -315,11 +321,16 @@
                         {{ if .Service.OSGuess }}{{ .Service.OSGuess }}{{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
                       {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
                     </td>
+                    <td class="cell-mono text-sm">
+                      {{ if and .Service .Service.LoginUsers }}
+                        {{ range $i, $u := .Service.LoginUsers }}{{ if $i }}, {{ end }}{{ $u }}{{ end }}
+                      {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
+                    </td>
                   </tr>
                   {{ end }}
                 {{ else }}
                   <tr>
-                    <td colspan="9" class="table-empty">
+                    <td colspan="10" class="table-empty">
                       No RDP hosts discovered yet.
                     </td>
                   </tr>
@@ -332,6 +343,12 @@
           <div class="card-body border-t border-subtle">
             <h3 class="card-title">Credential audit</h3>
             <p class="card-hint">Run an authorized dictionary check against selected open hosts from this scan.</p>
+            <div class="field mt-4">
+              <label for="brute-name" class="label">Audit name</label>
+              <input id="brute-name" name="name" type="text" maxlength="200"
+                placeholder="Credential audit: {{ .Scan.Name }}" class="input" autocomplete="off" spellcheck="false">
+              <p class="wordlist-hint">Optional. Defaults to a name derived from this scan.</p>
+            </div>
             <div class="mt-4">
               {{ template "auth_advanced" .Wordlists }}
             </div>

@@ -36,17 +36,22 @@ web UI.
   RDP_NEG), NLA detection, TLS version and cipher capture, certificate
   analysis (chain, self-signed, expiry, SHA-256 fingerprint), server-side
   encryption level/method and MCS details.
-* **Vulnerability checks** — BlueKeep (CVE-2019-0708) safe probe, DejaBlue
-  heuristic, NLA enforcement, weak encryption, obsolete TLS, self-signed and
-  expired certificates, exposed RDP service. Every finding carries evidence,
-  a confidence status (`vulnerable | potential | not_vulnerable |
-  inconclusive`) and remediation guidance.
+* **Vulnerability checks** — BlueKeep (CVE-2019-0708) safe probe, NLA
+  enforcement, weak encryption, obsolete TLS, self-signed and expired
+  certificates, exposed RDP service. Findings are confirmation-first: only
+  positively observed `vulnerable` or ruled-out `not_vulnerable` results are
+  reported (no speculative Critical/potential noise).
 * **Credential audit (opt-in)** — NLA/CredSSP + NTLMv2 dictionary checks with
   worker pool, jittered pacing, per-host failure budget and lockout
   detection.
-* **Session screenshots (opt-in)** — FreeRDP live capture when available; else
-  pure-Go NLA session with slow-path Bitmap Update decode; else evidence-card PNG.
-  Drawing Orders / RDPGFX are not implemented in the Go path.
+* **Session screenshots** — when login fails or is skipped, rdpshot tries a
+  pre-auth **login-screen** capture over TLS (`xfreerdp /sec:tls` under Xvfb).
+  If Winlogon is unreachable (NLA/HYBRID required), no synthetic detection PNG
+  is stored — the gallery only shows real frames. Optional `tesseract` OCR
+  extracts Winlogon account tiles into `login_users`. Live desktop capture
+  remains opt-in / post-login: FreeRDP when available, else pure-Go NLA bitmap
+  framebuffer, else a verified-login evidence card. Drawing Orders / RDPGFX are
+  not implemented in the Go path.
 * **Hardening score** — 0–100 compliance score (NLA, TLS, cert, crypto, criticals).
 * **Estate map** — `/estate` risk graph of hosts and findings per engagement.
 * **Client-trust checks** — certificate hostname/SAN mismatch and cipher posture.
@@ -355,31 +360,29 @@ footer shows the build version and developer attribution.
 | Check ID | CVE | Severity | Method |
 |---|---|---|---|
 | `rdp-service-exposed` | — | info | RDP listener reachable |
-| `nla-not-required` | — | high | RDP negotiation completed without NLA (HYBRID) |
+| `nla-not-required` | — | high | Negotiation selected RDP or TLS-only without CredSSP/NLA |
 | `rdp-security-without-tls` | — | medium | Legacy RDP security layer negotiated without TLS |
-| `bluekeep-cve-2019-0708` | CVE-2019-0708 | critical | Safe `MS_T120` channel-join probe (no exploit code) |
-| `dejablue-cve-2019-1181-1182` | CVE-2019-1181/1182 | critical | Heuristic (NLA off + old build); reported as `potential` |
-| `weak-encryption` | — | high | Encryption level `none/low` or 40/56-bit methods |
-| `weak-tls` | — | medium | TLS 1.0/1.1 or weak cipher (RC4/3DES/NULL) |
+| `bluekeep-cve-2019-0708` | CVE-2019-0708 | critical | Confirmed MCS Disconnect Provider Ultimatum after safe `MS_T120` probe |
+| `weak-encryption` | — | high | Encryption level `none/low` or exclusively 40/56-bit RC4 methods |
+| `weak-tls` | — | medium | TLS 1.0/1.1/SSL3 or weak cipher (RC4/3DES/NULL) |
 | `self-signed-cert` | — | medium | Self-signed certificate chain |
 | `expired-cert` | — | medium | Certificate `NotAfter` in the past |
 | `rdp-negotiation-failure` | — | low | Server returned `RDP_NEG_FAILURE` |
-| `hybrid-ex-not-offered` | — | info | CredSSP without `HYBRID_EX` / TLS-only |
-| `cert-missing-san` | — | low | Certificate has no DNS SANs |
-| `legacy-rdp-build` | — | medium | MCS server core version looks legacy |
+| `cert-hostname-mismatch` | — | medium | DNS SANs present and do not match scanned hostname |
+| `rd-web-exposed` / `rd-gateway-exposed` | — | info | Confirmed discovery markers |
+| `udp-3389-open` | — | low | UDP/3389 returned a response payload |
 
 ## Limitations
 
 * **BlueKeep detection is a safe probe only.** Two benign `MS_T120` channel
   messages are sent and the server's reaction is observed; no exploit code,
-  payload or shellcode is generated or executed. `vulnerable` means the probe
-  condition was observed; verify patch state locally before acting.
-* **NLA-enforced and legacy RDP-encrypted sessions are not probed for
-  BlueKeep.** The virtual-channel layer needed by the probe is unavailable
-  there; findings fall back to `potential` or `inconclusive`.
-* **DejaBlue results are heuristic.** Remote confirmation of
-  CVE-2019-1181/1182 is not possible; results are reported as `potential`,
-  never as confirmed.
+  payload or shellcode is generated or executed. `vulnerable` is reported only
+  when an MCS Disconnect Provider Ultimatum follows a complete check pair.
+* **NLA-enforced (HYBRID / HYBRID_EX) sessions are not probed for BlueKeep.**
+  The virtual-channel layer needed by the probe is unavailable there, so no
+  BlueKeep finding is emitted (avoids Critical false positives).
+* **DejaBlue is not reported remotely.** CVE-2019-1181/1182 cannot be confirmed
+  without local patch evidence; the scanner does not invent Critical findings.
 * **Screenshots require external tooling**: FreeRDP (`xfreerdp`), Xvfb
   (`xvfb-run`) and ImageMagick (`import`) or `ffmpeg` on the host, or the
   `full` Docker target. The slim image reports the missing tooling and skips

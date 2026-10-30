@@ -331,6 +331,18 @@ func TestScanDetailMasksCredentialSecret(t *testing.T) {
 	}
 }
 
+func TestOpenHostsOnlyDropsClosed(t *testing.T) {
+	in := []model.Host{
+		{Endpoint: model.Endpoint{Address: "10.0.0.5", Port: 3389}, State: "open"},
+		{Endpoint: model.Endpoint{Address: "10.0.0.6", Port: 3389}, State: "closed"},
+		{Endpoint: model.Endpoint{Address: "10.0.0.7", Port: 3389}, State: "filtered"},
+	}
+	got := openHostsOnly(in)
+	if len(got) != 1 || got[0].Endpoint.Address != "10.0.0.5" {
+		t.Fatalf("openHostsOnly = %+v", got)
+	}
+}
+
 // TestScreenshotURLRewrite locks the URL mapping used for image serving.
 func TestScreenshotURLRewrite(t *testing.T) {
 	got := screenshotURL("/outputs/screenshots/10.0.0.5_admin.png")
@@ -340,5 +352,43 @@ func TestScreenshotURLRewrite(t *testing.T) {
 	}
 	if got := screenshotURL("../../etc/passwd"); got != "/files/screenshots/passwd" {
 		t.Fatalf("hostile path reduced to %q", got)
+	}
+}
+
+func TestScreenshotViewsRewritesGalleryPaths(t *testing.T) {
+	in := []model.Screenshot{{
+		Address:  "192.168.112.76",
+		Port:     3389,
+		Username: "rdp-login",
+		FilePath: "/var/lib/rdpshot/outputs/screenshots/192.168.112.76_3389_rdp-login.png",
+		Width:    1024,
+		Height:   768,
+	}}
+	out := screenshotViews(in)
+	if len(out) != 1 {
+		t.Fatalf("len = %d", len(out))
+	}
+	if out[0].FilePath != "/files/screenshots/192.168.112.76_3389_rdp-login.png" {
+		t.Fatalf("gallery path = %q", out[0].FilePath)
+	}
+	if in[0].FilePath == out[0].FilePath {
+		t.Fatal("screenshotViews must not mutate the input slice element in place unexpectedly for callers that reuse DB rows")
+	}
+}
+
+func TestScreenshotViewsDropsSyntheticOpenHostCards(t *testing.T) {
+	in := []model.Screenshot{
+		{Username: "rdp-open", FilePath: "/var/lib/rdpshot/outputs/screenshots/a_rdp-open.png"},
+		{Username: "rdp-login", FilePath: "/var/lib/rdpshot/outputs/screenshots/b_rdp-login.png"},
+		{Username: "admin", FilePath: "/var/lib/rdpshot/outputs/screenshots/c_admin.png"},
+	}
+	out := screenshotViews(in)
+	if len(out) != 2 {
+		t.Fatalf("len = %d, want 2 real frames", len(out))
+	}
+	for _, sc := range out {
+		if sc.Username == "rdp-open" {
+			t.Fatal("synthetic detection card must not appear in gallery views")
+		}
 	}
 }
