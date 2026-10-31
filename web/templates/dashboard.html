@@ -104,6 +104,33 @@
                   <p class="wordlist-hint">Text target list (IP/CIDR per line) or Nmap XML (-oX) / Masscan output.</p>
                   <p class="targets-file-status hidden" data-targets-file-status role="status"></p>
                 </div>
+
+                <details class="auth-advanced mt-3">
+                  <summary class="auth-advanced-summary text-xs">Active Directory / LDAP discovery</summary>
+                  <div class="auth-advanced-body space-y-3 pt-2">
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div class="field">
+                        <label for="scan-ad-server" class="label">AD Server / DC IP</label>
+                        <input id="scan-ad-server" name="ad_server" type="text" placeholder="10.0.0.1" class="input input-sm">
+                      </div>
+                      <div class="field">
+                        <label for="scan-ad-domain" class="label">AD Domain</label>
+                        <input id="scan-ad-domain" name="ad_domain" type="text" placeholder="corp.example.com" class="input input-sm">
+                      </div>
+                    </div>
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div class="field">
+                        <label for="scan-ad-user" class="label">LDAP Bind Username</label>
+                        <input id="scan-ad-user" name="ad_user" type="text" placeholder="bind_user" class="input input-sm">
+                      </div>
+                      <div class="field">
+                        <label for="scan-ad-password" class="label">LDAP Bind Password</label>
+                        <input id="scan-ad-password" name="ad_password" type="password" class="input input-sm">
+                      </div>
+                    </div>
+                    <p class="wordlist-hint">Queries Active Directory for Windows servers with RDP servicePrincipalNames.</p>
+                  </div>
+                </details>
               </div>
 
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -169,7 +196,11 @@
                   </label>
                   <label class="check-row">
                     <input type="checkbox" name="enable_discovery" value="true" class="checkbox">
-                    RD Web / Gateway / UDP discovery
+                    RD Web / Gateway discovery
+                  </label>
+                  <label class="check-row">
+                    <input type="checkbox" name="enable_udp" value="true" class="checkbox">
+                    MS-RDPEUDP (UDP/3389 acceleration) probe
                   </label>
                   <label class="check-row">
                     <input type="checkbox" name="enable_auth" value="true" class="checkbox" data-enable-auth>
@@ -181,6 +212,25 @@
                   </label>
                 </div>
               </fieldset>
+
+              <details class="auth-advanced mt-3">
+                <summary class="auth-advanced-summary text-xs">SOAR &amp; Webhook alerts (optional)</summary>
+                <div class="auth-advanced-body space-y-3 pt-2">
+                  <div class="field">
+                    <label for="scan-webhook-url" class="label">Webhook URL (Slack, Teams, Discord, SOAR)</label>
+                    <input id="scan-webhook-url" name="webhook_url" type="url" placeholder="https://hooks.slack.com/services/..." class="input input-sm">
+                  </div>
+                  <div class="field">
+                    <label for="scan-webhook-level" class="label">Alert Level</label>
+                    <select id="scan-webhook-level" name="webhook_level" class="input input-sm">
+                      <option value="critical">Critical findings only</option>
+                      <option value="high">High &amp; Critical findings</option>
+                      <option value="all">All findings and scan finished</option>
+                    </select>
+                  </div>
+                  <p class="wordlist-hint">Outbound webhook JSON alert stream for SIEM / SOC notifications.</p>
+                </div>
+              </details>
 
               {{ template "auth_advanced" .Wordlists }}
 

@@ -151,6 +151,13 @@
                     <td>
                       <p class="cell-strong">{{ $f.Title }}</p>
                       <p class="cell-sub">{{ $f.CheckID }} · <a href="/api/v1/playbooks/{{ $f.CheckID }}" onclick="event.stopPropagation()">Playbook</a></p>
+                      {{ if $f.Compliance }}
+                      <div class="flex flex-wrap gap-1 mt-1">
+                        {{ range $f.Compliance }}
+                        <span class="badge badge-outline text-xs" title="{{ .Title }}"><strong>{{ .Standard }}</strong> {{ .Section }}</span>
+                        {{ end }}
+                      </div>
+                      {{ end }}
                     </td>
                     <td>
                       {{ if eq $f.Severity "critical" }}<span class="badge badge-rose">{{ $f.Severity }}</span>{{ else if eq $f.Severity "high" }}<span class="badge badge-orange">{{ $f.Severity }}</span>{{ else if eq $f.Severity "medium" }}<span class="badge badge-amber">{{ $f.Severity }}</span>{{ else if eq $f.Severity "low" }}<span class="badge badge-sky">{{ $f.Severity }}</span>{{ else }}<span class="badge badge-slate">{{ $f.Severity }}</span>{{ end }}
@@ -349,6 +356,11 @@
                       <span class="badge badge-emerald">{{ .State }}</span>
                       {{ if .Service }}
                         {{ if .Service.HoneypotDetected }}<span class="badge badge-amber ml-1" title="{{ .Service.HoneypotReason }}">honeypot</span>{{ end }}
+                        {{ if .Service.MFAEnforced }}<span class="badge badge-sky ml-1" title="MFA: {{ .Service.SecurityGateway }}">MFA</span>{{ end }}
+                        {{ if .Service.PAMProxy }}<span class="badge badge-purple ml-1" title="PAM: {{ .Service.SecurityGateway }}">PAM</span>{{ end }}
+                        {{ if .Service.NLADowngradeVulnerable }}<span class="badge badge-rose ml-1" title="NLA Downgrade Vulnerable">downgrade</span>{{ end }}
+                        {{ if .Service.ShadowUnprompted }}<span class="badge badge-orange ml-1" title="Unprompted Session Shadowing Exposed">shadow</span>{{ end }}
+                        {{ if .Service.UDP3389 }}<span class="badge badge-indigo ml-1" title="{{ if .Service.UDPRDPAcceleration }}MS-RDPEUDP Accelerated{{ else }}UDP 3389 Active{{ end }}">UDP{{ if .Service.UDPRDPAcceleration }}+RDPEUDP{{ end }}</span>{{ end }}
                       {{ end }}
                     </td>
                     <td>
@@ -360,7 +372,12 @@
                       {{ if .Service }}{{ printf "0x%08X" .Service.NegotiatedProtocol }}{{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
                     </td>
                     <td class="cell-mono">
-                      {{ if .Service }}{{ .Service.TLSVersion }}{{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
+                      {{ if .Service }}
+                        {{ .Service.TLSVersion }}
+                        {{ if .Service.SupportedTLSVersions }}
+                          <p class="item-note text-xs">{{ range $j, $v := .Service.SupportedTLSVersions }}{{ if $j }}, {{ end }}{{ $v }}{{ end }}</p>
+                        {{ end }}
+                      {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
                     </td>
                     <td>
                       {{ if .Service }}
