@@ -47,7 +47,7 @@ type XFreeRDPGrabber struct {
 func NewXFreeRDPGrabber(outputDir string) *XFreeRDPGrabber {
 	return &XFreeRDPGrabber{
 		OutputDir:   outputDir,
-		WaitSeconds: 8,
+		WaitSeconds: 12,
 		lookPath:    exec.LookPath,
 		run:         runCommand,
 	}
@@ -97,10 +97,10 @@ func (g *XFreeRDPGrabber) Grab(ctx context.Context, ep model.Endpoint, cred mode
 	outPath := filepath.Join(g.OutputDir, name)
 	waitSeconds := g.WaitSeconds
 	if waitSeconds <= 0 {
-		waitSeconds = 8
+		waitSeconds = 12
 	}
 
-	args := []string{"-a", "sh", "-c", captureScript}
+	args := []string{"-a", "-s", "-screen 0 1024x768x24", "sh", "-c", captureScript}
 	env := append(os.Environ(),
 		"RDSHOT_HOST="+ep.Address,
 		fmt.Sprintf("RDSHOT_PORT=%d", ep.Port),
@@ -109,7 +109,8 @@ func (g *XFreeRDPGrabber) Grab(ctx context.Context, ep model.Endpoint, cred mode
 		"RDSHOT_OUT="+outPath,
 		fmt.Sprintf("RDSHOT_WAIT=%d", waitSeconds),
 	)
-	output, err := g.run(ctx, "xvfb-run", args, env, cred.Secret)
+	// FreeRDP /from-stdin expects a trailing newline after the password.
+	output, err := g.run(ctx, "xvfb-run", args, env, cred.Secret+"\n")
 	if err != nil {
 		detail := strings.TrimSpace(string(output))
 		if len(detail) > 300 {
@@ -125,30 +126,90 @@ func (g *XFreeRDPGrabber) Grab(ctx context.Context, ep model.Endpoint, cred mode
 	if info.Size() == 0 {
 		return shot, fmt.Errorf("screenshot: capture produced an empty image at %q", outPath)
 	}
+	w, h, blank, err := inspectCapturePNG(outPath)
+	if err != nil {
+		_ = os.Remove(outPath)
+		return shot, fmt.Errorf("screenshot: inspect capture: %w", err)
+	}
+	if blank {
+		_ = os.Remove(outPath)
+		return shot, fmt.Errorf("screenshot: capture was blank (black frame)")
+	}
 
 	shot = model.Screenshot{
 		Address:    ep.Address,
 		Port:       ep.Port,
 		Username:   cred.Username,
 		FilePath:   outPath,
+		Width:      w,
+		Height:     h,
 		CapturedAt: now,
 	}
 	return shot, nil
 }
 
 // captureScript logs into the RDP session inside a headless X server, waits
-// briefly for the desktop, grabs one root-window frame, then kills FreeRDP so
-// the remote session disconnects immediately. Values arrive via environment
-// variables (and the password on stdin) to avoid shell interpolation hazards.
+// briefly for the desktop, grabs the FreeRDP window (falling back to the root
+// window), then kills FreeRDP so the remote session disconnects immediately.
+// Values arrive via environment variables (and the password on stdin) to avoid
+// shell interpolation hazards.
 const captureScript = `
 set -eu
-xfreerdp /v:"$RDSHOT_HOST:$RDSHOT_PORT" /u:"$RDSHOT_USER" /d:"$RDSHOT_DOMAIN" \
-  /cert:ignore /size:1024x768 /from-stdin >/dev/null 2>&1 &
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+# Empty domain must still pass /d:. — otherwise FreeRDP prompts for Domain
+# on stdin and consumes the /from-stdin password as the domain value.
+# RDSHOT_DOMAIN is often set-but-empty by the parent, so :- defaults alone
+# are not enough.
+domain="$RDSHOT_DOMAIN"
+if [ -z "$domain" ]; then
+  domain=.
+fi
+# Read the password before backgrounding: a bare "&" does not reliably keep
+# the parent pipe attached to xfreerdp's /from-stdin. $(cat) strips a trailing
+# newline, so always re-terminate when feeding FreeRDP.
+pass=$(cat)
+printf '%s\n' "$pass" | xfreerdp /v:"$RDSHOT_HOST:$RDSHOT_PORT" /u:"$RDSHOT_USER" /d:"$domain" \
+  /cert:ignore /sec:nla /size:1024x768 /bpp:24 /from-stdin >"$log" 2>&1 &
 pid=$!
-trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
-sleep "$RDSHOT_WAIT"
+trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; rm -f "$log"' EXIT
+have_window=0
+for _ in $(seq 1 "$RDSHOT_WAIT"); do
+  if xwininfo -root -tree 2>/dev/null | grep -q FreeRDP; then
+    have_window=1
+    break
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "freerdp exited before a window appeared" >&2
+    tail -n 20 "$log" >&2 || true
+    exit 4
+  fi
+  sleep 1
+done
+if [ "$have_window" -ne 1 ]; then
+  echo "freerdp window never appeared" >&2
+  tail -n 20 "$log" >&2 || true
+  exit 5
+fi
+# Desktop paint is slow under Xvfb; keep a generous settle after the window maps.
+settle=$((RDSHOT_WAIT - 4))
+if [ "$settle" -lt 6 ]; then
+  settle=6
+fi
+sleep "$settle"
+wid=""
+if command -v xdotool >/dev/null 2>&1; then
+  wid=$(xdotool search --name "FreeRDP" 2>/dev/null | head -n1 || true)
+fi
+if [ -z "$wid" ]; then
+  wid=$(xwininfo -root -tree 2>/dev/null | awk '/FreeRDP/{print $1; exit}' || true)
+fi
 if command -v import >/dev/null 2>&1; then
-  import -window root "$RDSHOT_OUT"
+  if [ -n "$wid" ]; then
+    import -window "$wid" "$RDSHOT_OUT"
+  else
+    import -window root "$RDSHOT_OUT"
+  fi
 elif command -v ffmpeg >/dev/null 2>&1; then
   ffmpeg -loglevel error -f x11grab -video_size 1024x768 -i "${DISPLAY:-:99}" -frames:v 1 "$RDSHOT_OUT"
 else

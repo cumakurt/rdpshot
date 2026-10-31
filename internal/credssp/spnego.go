@@ -21,7 +21,10 @@ var spnegoOID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 2}
 var OfferKerberos bool
 
 // WrapNegTokenInit wraps a raw NTLM token in a SPNEGO NegTokenInit
-// (RFC 4178) advertising the NTLM mechanism:
+// (RFC 4178) advertising the NTLM mechanism, then frames it with the
+// GSS-API Application 0 wrapper that Windows CredSSP/SSPI expects:
+//
+//	APPLICATION 0 { OID 1.3.6.1.5.5.2, [0] NegTokenInit }
 //
 //	[0] NegTokenInit ::= SEQUENCE {
 //	    mechTypes [0] MechTypeList,
@@ -40,12 +43,12 @@ func WrapNegTokenInit(ntlmToken []byte) ([]byte, error) {
 		return nil, fmt.Errorf("credssp: marshal mechToken: %w", err)
 	}
 	fields := append(derExplicit(0, mechTypes), derExplicit(2, mechToken)...)
-	return wrapChoice(0, fields), nil
+	return wrapGSS(wrapChoice(0, fields))
 }
 
 // WrapNegTokenResp wraps a raw NTLM token in a SPNEGO NegTokenResp
-// (RFC 4178) carrying only the responseToken, which is what the CredSSP
-// client sends for the AUTHENTICATE message.
+// (RFC 4178) carrying only the responseToken, then frames it with the
+// GSS-API Application 0 wrapper used by Windows CredSSP/SSPI.
 //
 //	[1] NegTokenResp ::= SEQUENCE { responseToken [2] OCTET STRING }
 func WrapNegTokenResp(ntlmToken []byte) ([]byte, error) {
@@ -53,7 +56,22 @@ func WrapNegTokenResp(ntlmToken []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credssp: marshal responseToken: %w", err)
 	}
-	return wrapChoice(1, derExplicit(2, mechToken)), nil
+	return wrapGSS(wrapChoice(1, derExplicit(2, mechToken)))
+}
+
+// wrapGSS frames a NegotiationToken as APPLICATION 0 { SPNEGO OID, token }
+// (RFC 2743 / MS-SPNG). Windows CredSSP rejects bare NegTokenInit on some
+// builds with a TLS internal_error alert during the first TSRequest.
+func wrapGSS(negotiationToken []byte) ([]byte, error) {
+	oid, err := asn1.Marshal(spnegoOID)
+	if err != nil {
+		return nil, fmt.Errorf("credssp: marshal SPNEGO OID: %w", err)
+	}
+	content := append(append([]byte(nil), oid...), negotiationToken...)
+	out := make([]byte, 0, 1+len(derLength(len(content)))+len(content))
+	out = append(out, 0x60) // APPLICATION 0, constructed
+	out = append(out, derLength(len(content))...)
+	return append(out, content...), nil
 }
 
 // wrapChoice encodes a NegotiationToken CHOICE member as [tag] EXPLICIT

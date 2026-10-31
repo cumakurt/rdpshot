@@ -90,3 +90,54 @@ func WithTargetName(pairs []AVPair, target string) []AVPair {
 	out = append(out, AVPair{ID: MsvAvTargetName, Data: encodeUTF16LE(target)})
 	return out
 }
+
+// WithChannelBindings appends (or replaces) an MsvAvChannelBindings pair.
+// A 16-byte zero value is the CredSSP/RDP convention when the client does not
+// compute GSS channel bindings (MS-NLMP 2.2.2.1).
+func WithChannelBindings(pairs []AVPair, bindings []byte) []AVPair {
+	if bindings == nil {
+		bindings = make([]byte, 16)
+	}
+	out := make([]AVPair, 0, len(pairs)+1)
+	for _, p := range pairs {
+		if p.ID == MsvAvChannelBindings {
+			continue
+		}
+		out = append(out, p)
+	}
+	out = append(out, AVPair{ID: MsvAvChannelBindings, Data: append([]byte(nil), bindings...)})
+	return out
+}
+
+// MsvAvFlagsMIC is the AvFlags bit that declares a MIC is present on the
+// AUTHENTICATE_MESSAGE (MS-NLMP 2.2.2.1).
+const MsvAvFlagsMIC uint32 = 0x00000002
+
+// EnrichTargetInfoForCredSSP copies the server target info and appends the
+// channel-bindings, MIC AvFlags, and optional TERMSRV target-name AV pairs
+// expected by Windows CredSSP / FreeRDP before the NTLMv2 proof is computed.
+func EnrichTargetInfoForCredSSP(serverTargetInfo []byte, serviceSPN string) ([]byte, error) {
+	pairs, err := ParseAVPairs(serverTargetInfo)
+	if err != nil {
+		return nil, err
+	}
+	pairs = WithChannelBindings(pairs, nil)
+	pairs = withAvFlags(pairs, MsvAvFlagsMIC)
+	if serviceSPN != "" {
+		pairs = WithTargetName(pairs, serviceSPN)
+	}
+	return MarshalAVPairs(pairs), nil
+}
+
+func withAvFlags(pairs []AVPair, flags uint32) []AVPair {
+	out := make([]AVPair, 0, len(pairs)+1)
+	for _, p := range pairs {
+		if p.ID == MsvAvFlags {
+			continue
+		}
+		out = append(out, p)
+	}
+	var data [4]byte
+	binary.LittleEndian.PutUint32(data[:], flags)
+	return append(out, AVPair{ID: MsvAvFlags, Data: data[:]})
+}

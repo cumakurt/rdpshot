@@ -12,10 +12,10 @@ func TestWrapUnwrapNegTokenInit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The wrapper must be [0] EXPLICIT SEQUENCE as required by RFC 4178
-	// (EXPLICIT TAGS module).
-	if wrapped[0] != 0xa0 {
-		t.Fatalf("NegTokenInit must start with context tag [0], got 0x%02x", wrapped[0])
+	// Windows CredSSP expects the GSS-API Application 0 wrapper around
+	// the RFC 4178 NegTokenInit ([0] EXPLICIT SEQUENCE).
+	if wrapped[0] != 0x60 {
+		t.Fatalf("NegTokenInit must start with GSS APPLICATION 0, got 0x%02x", wrapped[0])
 	}
 	got, err := UnwrapSPNEGO(wrapped)
 	if err != nil {
@@ -32,8 +32,8 @@ func TestWrapUnwrapNegTokenResp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wrapped[0] != 0xa1 {
-		t.Fatalf("NegTokenResp must start with context tag [1], got 0x%02x", wrapped[0])
+	if wrapped[0] != 0x60 {
+		t.Fatalf("NegTokenResp must start with GSS APPLICATION 0, got 0x%02x", wrapped[0])
 	}
 	got, err := UnwrapSPNEGO(wrapped)
 	if err != nil {

@@ -31,9 +31,25 @@ func fakeGrabber(t *testing.T, outputDir string, available bool, capture bool) (
 		rec.stdin = stdin
 		if capture {
 			out := envValue(env, "RDSHOT_OUT")
-			if err := os.WriteFile(out, []byte("png-bytes"), 0o600); err != nil {
+			img := image.NewRGBA(image.Rect(0, 0, 64, 48))
+			for y := 0; y < 48; y++ {
+				for x := 0; x < 64; x++ {
+					i := y*img.Stride + x*4
+					img.Pix[i+0] = 40
+					img.Pix[i+1] = 120
+					img.Pix[i+2] = 180
+					img.Pix[i+3] = 255
+				}
+			}
+			f, err := os.Create(out)
+			if err != nil {
 				return nil, err
 			}
+			if err := png.Encode(f, img); err != nil {
+				f.Close()
+				return nil, err
+			}
+			f.Close()
 		}
 		return []byte("ok"), nil
 	}
@@ -48,12 +64,16 @@ type captureRecorder struct {
 }
 
 func envValue(env []string, key string) string {
+	// Prefer the last match: Grab appends overrides after os.Environ(), so an
+	// ambient RDSHOT_* from the developer shell must not win.
+	prefix := key + "="
+	value := ""
 	for _, entry := range env {
-		if strings.HasPrefix(entry, key+"=") {
-			return strings.TrimPrefix(entry, key+"=")
+		if strings.HasPrefix(entry, prefix) {
+			value = strings.TrimPrefix(entry, prefix)
 		}
 	}
-	return ""
+	return value
 }
 
 func TestFileNameIsSafe(t *testing.T) {
@@ -102,8 +122,8 @@ func TestGrabStoresImage(t *testing.T) {
 	if filepath.Dir(shot.FilePath) != dir {
 		t.Fatalf("image escaped output dir: %s", shot.FilePath)
 	}
-	if rec.stdin != "redacted" {
-		t.Fatal("password must be passed through stdin, never through argv")
+	if rec.stdin != "redacted\n" {
+		t.Fatalf("password stdin = %q, want trailing newline for FreeRDP /from-stdin", rec.stdin)
 	}
 	for _, arg := range rec.args {
 		if strings.Contains(arg, "redacted") {
@@ -112,6 +132,50 @@ func TestGrabStoresImage(t *testing.T) {
 	}
 	if envValue(rec.env, "RDSHOT_HOST") != "10.0.0.9" {
 		t.Fatalf("host env = %q", envValue(rec.env, "RDSHOT_HOST"))
+	}
+	joined := strings.Join(rec.args, " ")
+	if !strings.Contains(joined, "-screen 0 1024x768x24") {
+		t.Fatalf("xvfb geometry missing from args: %#v", rec.args)
+	}
+	scriptBody := ""
+	for i, a := range rec.args {
+		if a == "-c" && i+1 < len(rec.args) {
+			scriptBody = rec.args[i+1]
+		}
+	}
+	if !strings.Contains(scriptBody, "/sec:nla") {
+		t.Fatalf("authenticated capture script missing /sec:nla: %q", scriptBody)
+	}
+	if !strings.Contains(scriptBody, `if [ -z "$domain" ]; then`) || !strings.Contains(scriptBody, `domain=.`) {
+		t.Fatalf("authenticated capture script must default empty domain to .: %q", scriptBody)
+	}
+	if shot.Width != 64 || shot.Height != 48 {
+		t.Fatalf("dimensions = %dx%d", shot.Width, shot.Height)
+	}
+}
+
+func TestGrabRejectsBlankPNG(t *testing.T) {
+	dir := t.TempDir()
+	grabber, _ := fakeGrabber(t, dir, true, true)
+	grabber.run = func(_ context.Context, name string, args []string, env []string, stdin string) ([]byte, error) {
+		out := envValue(env, "RDSHOT_OUT")
+		img := image.NewRGBA(image.Rect(0, 0, 64, 48))
+		f, err := os.Create(out)
+		if err != nil {
+			return nil, err
+		}
+		if err := png.Encode(f, img); err != nil {
+			f.Close()
+			return nil, err
+		}
+		f.Close()
+		return []byte("ok"), nil
+	}
+	_, err := grabber.Grab(context.Background(),
+		model.Endpoint{Address: "10.0.0.9", Port: 3389},
+		model.Credential{Username: "u", Secret: "p"})
+	if err == nil || !strings.Contains(err.Error(), "blank") {
+		t.Fatalf("err = %v, want blank-frame error", err)
 	}
 }
 
@@ -187,6 +251,29 @@ func TestAutoGrabberFallsBack(t *testing.T) {
 	}
 	if filepath.Dir(shot.FilePath) != dir {
 		t.Fatalf("path = %s", shot.FilePath)
+	}
+}
+
+func TestAutoGrabberErrorsWhenLiveCaptureFails(t *testing.T) {
+	dir := t.TempDir()
+	auto := NewAutoGrabber(dir, nil)
+	// FreeRDP tooling appears available, but Grab fails — must not store an
+	// evidence card that claims tooling is missing.
+	primary := NewXFreeRDPGrabber(dir)
+	primary.lookPath = func(file string) (string, error) { return "/usr/bin/" + file, nil }
+	primary.run = func(context.Context, string, []string, []string, string) ([]byte, error) {
+		return nil, errors.New("blank frame")
+	}
+	auto.Primary = primary
+	auto.Secondary = stubGrabber{err: errors.New("framebuffer unavailable in test")}
+	_, err := auto.Grab(context.Background(),
+		model.Endpoint{Address: "10.0.0.9", Port: 3389},
+		model.Credential{Username: "u", Secret: "p"})
+	if err == nil {
+		t.Fatal("expected live-capture error, not evidence-card success")
+	}
+	if !strings.Contains(err.Error(), "freerdp") {
+		t.Fatalf("err = %v, want freerdp context", err)
 	}
 }
 

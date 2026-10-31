@@ -97,13 +97,13 @@ func (g *EvidenceGrabber) writeCard(ctx context.Context, ep model.Endpoint, labe
 func renderVerifiedEvidenceCard(ep model.Endpoint, cred model.Credential, at time.Time) image.Image {
 	img, text, muted := newEvidenceCanvas(color.RGBA{R: 16, G: 185, B: 129, A: 255}) // emerald
 	drawBitmap(img, 80, 120, "RDPShot session evidence", text, 3)
-	drawBitmap(img, 80, 175, "Authentication verified - desktop capture tooling unavailable", muted, 2)
+	drawBitmap(img, 80, 175, "Authentication verified - live desktop capture unavailable", muted, 2)
 	drawBitmap(img, 80, 260, fmt.Sprintf("Host      %s:%d", ep.Address, ep.Port), text, 2)
 	drawBitmap(img, 80, 310, fmt.Sprintf("User      %s", displayUser(cred)), text, 2)
 	drawBitmap(img, 80, 360, fmt.Sprintf("Method    %s", fallback(cred.Method, "nla")), text, 2)
 	drawBitmap(img, 80, 410, fmt.Sprintf("Captured  %s", at.Format(time.RFC3339)), text, 2)
-	drawBitmap(img, 80, 500, "This image is a pure-Go evidence card, not a framebuffer dump.", muted, 2)
-	drawBitmap(img, 80, 550, "Install FreeRDP + Xvfb + ImageMagick/ffmpeg for live screenshots.", muted, 2)
+	drawBitmap(img, 80, 500, "This is a placeholder evidence card, not a remote desktop frame.", muted, 2)
+	drawBitmap(img, 80, 550, "Needs FreeRDP + Xvfb + ImageMagick/ffmpeg on the scanner host.", muted, 2)
 	return img
 }
 

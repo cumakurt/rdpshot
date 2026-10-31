@@ -179,7 +179,11 @@ func (s *session) setupSecurityLayer(ctx context.Context) error {
 	}
 	// Certificate trust is irrelevant for a scanner; the certificate is
 	// captured and reported instead of being validated against a CA.
-	tlsConn := tls.Client(s.conn, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // documented above
+	tlsConn := tls.Client(s.conn, &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // documented above
+		MinVersion:         tls.VersionTLS12,
+		MaxVersion:         tls.VersionTLS12,
+	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return fmt.Errorf("rdp: TLS handshake: %w", err)
 	}

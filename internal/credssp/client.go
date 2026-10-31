@@ -15,21 +15,20 @@ import (
 	"net"
 	"time"
 
-	"rdpshot/internal/kerberos"
 	"rdpshot/internal/ntlm"
 )
 
 // NTSTATUS codes reported through TSRequest.errorCode (MS-ERREF 2.3).
 const (
-	StatusWrongPassword            uint32 = 0xC000006A
-	StatusNoSuchUser               uint32 = 0xC0000064
-	StatusAccountLockedOut         uint32 = 0xC0000234
-	StatusAccountDisabled          uint32 = 0xC0000072
-	StatusLogonTypeNotGranted      uint32 = 0xC000015B
-	StatusNotSupported             uint32 = 0xC00000BB
-	StatusSmartcardLogonRequired   uint32 = 0xC000015C
-	StatusSmartcardWrongPIN        uint32 = 0xC0000388
-	StatusSmartcardCardNotPresent  uint32 = 0xC0000382
+	StatusWrongPassword           uint32 = 0xC000006A
+	StatusNoSuchUser              uint32 = 0xC0000064
+	StatusAccountLockedOut        uint32 = 0xC0000234
+	StatusAccountDisabled         uint32 = 0xC0000072
+	StatusLogonTypeNotGranted     uint32 = 0xC000015B
+	StatusNotSupported            uint32 = 0xC00000BB
+	StatusSmartcardLogonRequired  uint32 = 0xC000015C
+	StatusSmartcardWrongPIN       uint32 = 0xC0000388
+	StatusSmartcardCardNotPresent uint32 = 0xC0000382
 )
 
 // NTStatusError reports that the peer terminated the CredSSP exchange with
@@ -122,10 +121,6 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, domain stri
 	if !ok {
 		return nil, fmt.Errorf("credssp: handshake requires a TLS connection")
 	}
-	serverPublicKey, err := serverSubjectPublicKey(tlsConn)
-	if err != nil {
-		return nil, err
-	}
 
 	version := c.version()
 	flags := c.ntlmFlags()
@@ -133,22 +128,29 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, domain stri
 		domain = c.Domain
 	}
 
-	OfferKerberos = kerberos.Available()
 	negotiate, err := ntlm.NegotiateMessage{Flags: flags}.Marshal()
 	if err != nil {
 		return nil, fmt.Errorf("credssp: build NTLM NEGOTIATE: %w", err)
 	}
-	negoInit, err := WrapNegTokenInit(negotiate)
-	if err != nil {
-		return nil, err
+	// FreeRDP "direct NTLM": send bare NTLMSSP NEGOTIATE (not SPNEGO-wrapped).
+	// CredSSP v5/v6: send clientNonce with the first TSRequest (FreeRDP does
+	// the same). Without it, modern Windows aborts with TLS internal_error.
+	var clientNonce []byte
+	first := TSRequest{Version: version, NegoTokens: [][]byte{negotiate}}
+	if version >= 5 {
+		clientNonce = make([]byte, 32)
+		if _, err := rand.Read(clientNonce); err != nil {
+			return nil, fmt.Errorf("credssp: generate binding nonce: %w", err)
+		}
+		first.ClientNonce = clientNonce
 	}
-	if err := writeTSRequest(conn, TSRequest{Version: version, NegoTokens: [][]byte{negoInit}}); err != nil {
+	if err := writeTSRequest(tlsConn, first); err != nil {
 		return nil, err
 	}
 
-	resp, err := readTSRequest(ctx, conn)
+	resp, err := readTSRequest(ctx, tlsConn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("credssp first TSRequest: %w", err)
 	}
 	if resp.ErrorCode != nil {
 		return nil, &NTStatusError{Code: *resp.ErrorCode}
@@ -161,49 +163,71 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, domain stri
 	if err != nil {
 		return nil, fmt.Errorf("credssp: parse NTLM CHALLENGE: %w", err)
 	}
+	serverPublicKey, err := serverSubjectPublicKey(tlsConn)
+	if err != nil {
+		return nil, err
+	}
 
 	timestamp := challengeTimestamp(challenge.TargetInfo)
 	clientChallenge := make([]byte, ntlm.ClientChallengeLen)
 	if _, err := rand.Read(clientChallenge); err != nil {
 		return nil, fmt.Errorf("credssp: generate client challenge: %w", err)
 	}
+	// Echo KEY_EXCH when the server offered it so EncryptedRandomSessionKey
+	// is populated; otherwise Windows returns SEC_E_INVALID_TOKEN.
+	authFlags := flags
+	if challenge.Flags&ntlm.NEGOTIATE_KEY_EXCH != 0 {
+		authFlags |= ntlm.NEGOTIATE_KEY_EXCH
+	}
+	spn := ""
+	if challenge.TargetName != "" {
+		spn = "TERMSRV/" + challenge.TargetName
+	}
+	targetInfo, err := ntlm.EnrichTargetInfoForCredSSP(challenge.TargetInfo, spn)
+	if err != nil {
+		return nil, fmt.Errorf("credssp: enrich target info: %w", err)
+	}
 	const workstation = ""
 	var (
-		authMsg *ntlm.AuthenticateMessage
-		baseKey []byte
+		authMsg     *ntlm.AuthenticateMessage
+		exportedKey []byte
 	)
 	switch {
 	case len(secret.NTHash) > 0:
-		authMsg, baseKey, err = ntlm.BuildAuthenticateFromNTHash(flags, domain, user, secret.NTHash, workstation,
-			challenge.ServerChallenge, challenge.TargetInfo, timestamp, clientChallenge)
+		authMsg, exportedKey, err = ntlm.BuildAuthenticateFromNTHash(authFlags, domain, user, secret.NTHash, workstation,
+			challenge.ServerChallenge, targetInfo, timestamp, clientChallenge)
 	default:
-		authMsg, baseKey, err = ntlm.BuildAuthenticate(flags, domain, user, secret.Password, workstation,
-			challenge.ServerChallenge, challenge.TargetInfo, timestamp, clientChallenge)
+		authMsg, exportedKey, err = ntlm.BuildAuthenticate(authFlags, domain, user, secret.Password, workstation,
+			challenge.ServerChallenge, targetInfo, timestamp, clientChallenge)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("credssp: build NTLM AUTHENTICATE: %w", err)
+	}
+	// MIC over raw NTLM messages (not SPNEGO); required once AvFlagsMIC is set.
+	if err := authMsg.SetMIC(exportedKey, negotiate, challengeToken); err != nil {
+		return nil, fmt.Errorf("credssp: compute NTLM MIC: %w", err)
 	}
 	authDER, err := authMsg.Marshal()
 	if err != nil {
 		return nil, fmt.Errorf("credssp: marshal NTLM AUTHENTICATE: %w", err)
 	}
-	negoResp, err := WrapNegTokenResp(authDER)
-	if err != nil {
-		return nil, err
-	}
-
-	security := ntlm.NewSessionSecurity(baseKey, flags, true)
+	// After mech selection, send the AUTHENTICATE token as raw NTLMSSP
+	// (FreeRDP "direct NTLM"); GSS/SPNEGO wrapping on this message causes
+	// some Windows hosts to abort the TLS session.
+	security := ntlm.NewSessionSecurity(exportedKey, authFlags, true)
 	negotiated := minVersion(version, resp.Version)
 
-	request := TSRequest{Version: version, NegoTokens: [][]byte{negoResp}}
+	request := TSRequest{Version: version, NegoTokens: [][]byte{authDER}}
 	switch {
 	case negotiated >= 5:
-		nonce := make([]byte, 32)
-		if _, err := rand.Read(nonce); err != nil {
-			return nil, fmt.Errorf("credssp: generate binding nonce: %w", err)
+		if len(clientNonce) == 0 {
+			clientNonce = make([]byte, 32)
+			if _, err := rand.Read(clientNonce); err != nil {
+				return nil, fmt.Errorf("credssp: generate binding nonce: %w", err)
+			}
 		}
-		request.ClientNonce = nonce
-		request.PubKeyAuth, err = pubKeyAuthV5(security, ClientServerHashMagic, nonce, serverPublicKey)
+		request.ClientNonce = clientNonce
+		request.PubKeyAuth, err = pubKeyAuthV5(security, ClientServerHashMagic, clientNonce, serverPublicKey)
 		if err != nil {
 			return nil, err
 		}
@@ -213,13 +237,13 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, domain stri
 			return nil, err
 		}
 	}
-	if err := writeTSRequest(conn, request); err != nil {
+	if err := writeTSRequest(tlsConn, request); err != nil {
 		return nil, err
 	}
 
-	final, err := readTSRequest(ctx, conn)
+	final, err := readTSRequest(ctx, tlsConn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("credssp second TSRequest: %w", err)
 	}
 	if final.ErrorCode != nil {
 		return nil, &NTStatusError{Code: *final.ErrorCode}
@@ -243,23 +267,20 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, domain stri
 		return &Session{Conn: tlsConn, Security: security, Version: negotiated}, nil
 	}
 
-	// Pass-the-hash sessions still send TSPasswordCreds; the cleartext is
-	// unknown so an empty password is used (best-effort NLA session open).
 	password := secret.Password
 	credDER, err := BuildPasswordCredentials(domain, user, password)
 	if err != nil {
 		return nil, err
 	}
 	sealed := security.Seal(credDER)
-	if err := writeTSRequest(conn, TSRequest{Version: version, AuthInfo: sealed}); err != nil {
+	if err := writeTSRequest(tlsConn, TSRequest{Version: version, AuthInfo: sealed}); err != nil {
 		return nil, err
 	}
-	// Some servers send an empty follow-up TSRequest; tolerate EOF/timeout.
-	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	if follow, err := readTSRequest(ctx, conn); err == nil && follow.ErrorCode != nil {
+	_ = tlsConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if follow, err := readTSRequest(ctx, tlsConn); err == nil && follow.ErrorCode != nil {
 		return nil, &NTStatusError{Code: *follow.ErrorCode}
 	}
-	_ = conn.SetReadDeadline(time.Time{})
+	_ = tlsConn.SetReadDeadline(time.Time{})
 
 	return &Session{Conn: tlsConn, Security: security, Version: negotiated}, nil
 }

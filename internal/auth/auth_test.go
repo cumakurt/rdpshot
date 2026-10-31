@@ -197,7 +197,11 @@ func serveCredSSP(conn net.Conn, cert *x509.Certificate, script fakeServerScript
 	if err != nil {
 		return err
 	}
-	security := ntlm.NewSessionSecurity(baseKey, ntlm.DefaultNegotiateFlags, false)
+	exported := baseKey
+	if authMsg.Flags&ntlm.NEGOTIATE_KEY_EXCH != 0 && len(authMsg.EncryptedRandomSessionKey) > 0 {
+		exported = ntlm.UnwrapExportedSessionKey(baseKey, authMsg.EncryptedRandomSessionKey)
+	}
+	security := ntlm.NewSessionSecurity(exported, ntlm.DefaultNegotiateFlags, false)
 	if len(req.ClientNonce) != 32 {
 		return fmt.Errorf("server: clientNonce length %d, want 32", len(req.ClientNonce))
 	}

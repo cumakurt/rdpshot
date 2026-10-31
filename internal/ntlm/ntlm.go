@@ -53,7 +53,8 @@ const (
 )
 
 // DefaultNegotiateFlags is the flag set offered by the CredSSP client:
-// NTLMv2 with extended session security, sealing and 128-bit keys.
+// NTLMv2 with extended session security, sealing, 128-bit keys and key
+// exchange (required by modern Windows CredSSP peers).
 const DefaultNegotiateFlags = NEGOTIATE_UNICODE |
 	REQUEST_TARGET |
 	NEGOTIATE_NTLM |
@@ -62,6 +63,7 @@ const DefaultNegotiateFlags = NEGOTIATE_UNICODE |
 	NEGOTIATE_TARGET_INFO |
 	NEGOTIATE_VERSION |
 	NEGOTIATE_128 |
+	NEGOTIATE_KEY_EXCH |
 	NEGOTIATE_SEAL |
 	NEGOTIATE_SIGN |
 	NEGOTIATE_56

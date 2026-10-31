@@ -140,3 +140,14 @@ Out of scope: exploit/payload, LSASS/hash dump, lateral movement, C2, exfil.
 - [x] Keep on-disk screenshot paths in reportData (fix web URL rewrite that broke embeds)
 - [x] PDF/HTML embed captures; CSV adds `SCREENSHOT` rows with base64 image
 - [x] Tests: reporter CSV + server export selector; live verify on :8722
+
+## NLA host 172.16.3.128 analysis (2026-10-31)
+
+- [x] Confirmed HYBRID_EX + TLS-only `HYBRID_REQUIRED_BY_SERVER` (no pre-auth tiles/OCR)
+- [x] Scan verify: login-screen skip message; FreeRDP NLA logon previously OK for `cmk`
+- [x] CredSSP hardening: early `clientNonce`, `KEY_EXCH`, bare NTLM AUTHENTICATE, CredSSP target-info enrich
+- [x] UX: `login_screen_skip_reason` evidence + scan detail “NLA blocks tiles”
+- [x] Live re-auth+desktop screenshot after VM recovers (`RDPSHOT_LIVE=1`)
+- [x] CredSSP Seal: MD5 key derivation + KEY_EXCH wire (version/seq plaintext)
+- [x] Pin TLS 1.2 for CredSSP auth/capture
+- [x] FreeRDP grabber: `/sec:nla`, `/d:.`, stdin password pipe, reject blank frames

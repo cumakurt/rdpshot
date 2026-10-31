@@ -365,6 +365,11 @@
                     <td class="cell-mono text-sm">
                       {{ if and .Service .Service.LoginUsers }}
                         {{ range $i, $u := .Service.LoginUsers }}{{ if $i }}, {{ end }}{{ $u }}{{ end }}
+                      {{ else if and .Service .Service.Evidence }}
+                        {{ with index .Service.Evidence "login_screen_skip_reason" }}
+                          <span class="tone-slate" title="{{ . }}">NLA blocks tiles</span>
+                          <p class="item-note">{{ . }}</p>
+                        {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
                       {{ else }}<span class="tone-slate">&mdash;</span>{{ end }}
                     </td>
                     <td class="text-xs">

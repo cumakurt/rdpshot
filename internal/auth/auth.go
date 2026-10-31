@@ -86,7 +86,13 @@ func (a *credSSPAuthenticator) Authenticate(ctx context.Context, ep model.Endpoi
 	// This is a credential scanner, not a trusted connection: server
 	// certificate validation is irrelevant to the question "does this
 	// credential work", so chain verification is skipped deliberately.
-	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+	// Pin TLS 1.2: Windows CredSSP over TLS 1.3 commonly stalls after the
+	// AUTHENTICATE/pubKeyAuth TSRequest (FreeRDP and our live probes use 1.2).
+	tlsConn := tls.Client(conn, &tls.Config{
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
+		MaxVersion:         tls.VersionTLS12,
+	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return a.classify(ctx, err)
 	}

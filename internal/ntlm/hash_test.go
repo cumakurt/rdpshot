@@ -171,12 +171,13 @@ func TestBuildAuthenticateFromNTHashMatchesPassword(t *testing.T) {
 	timestamp := filetimeFromUnix(1700000000)
 	clientChallenge := []byte{9, 10, 11, 12, 13, 14, 15, 16}
 
-	fromPass, keyPass, err := BuildAuthenticate(DefaultNegotiateFlags, "Domain", "User", "Password", "WS",
+	flags := DefaultNegotiateFlags &^ NEGOTIATE_KEY_EXCH
+	fromPass, keyPass, err := BuildAuthenticate(flags, "Domain", "User", "Password", "WS",
 		serverChallenge, info, timestamp, clientChallenge)
 	if err != nil {
 		t.Fatalf("password build: %v", err)
 	}
-	fromHash, keyHash, err := BuildAuthenticateFromNTHash(DefaultNegotiateFlags, "Domain", "User", NTHash("Password"), "WS",
+	fromHash, keyHash, err := BuildAuthenticateFromNTHash(flags, "Domain", "User", NTHash("Password"), "WS",
 		serverChallenge, info, timestamp, clientChallenge)
 	if err != nil {
 		t.Fatalf("hash build: %v", err)

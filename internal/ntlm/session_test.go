@@ -59,6 +59,16 @@ func TestSealUnsealRoundTrip(t *testing.T) {
 		if len(sealed) != SignatureLen+len(p) {
 			t.Fatalf("input %d: sealed length = %d, want %d", i, len(sealed), SignatureLen+len(p))
 		}
+		// Version and sequence stay plaintext on the wire (MS-NLMP / FreeRDP).
+		if sealed[0] != 0x01 || sealed[1] != 0x00 || sealed[2] != 0x00 || sealed[3] != 0x00 {
+			t.Fatalf("input %d: version must be plaintext 1, got %x", i, sealed[:4])
+		}
+		if sealed[12] != byte(i) || sealed[13] != 0 || sealed[14] != 0 || sealed[15] != 0 {
+			t.Fatalf("input %d: seq must be plaintext %d, got %x", i, i, sealed[12:16])
+		}
+		if len(p) > 0 && bytes.Equal(sealed[SignatureLen:], p) {
+			t.Fatalf("input %d: payload must be RC4-encrypted", i)
+		}
 		got, err := server.Unseal(sealed)
 		if err != nil {
 			t.Fatalf("input %d: unseal: %v", i, err)

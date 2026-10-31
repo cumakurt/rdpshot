@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -812,6 +813,20 @@ func TestRunOpenHostSkipsSyntheticEvidenceWhenLoginUIUnavailable(t *testing.T) {
 	}
 	if scan.Progress.Screens != 0 {
 		t.Errorf("progress.Screens = %d, want 0", scan.Progress.Screens)
+	}
+	hosts, err := env.store.ListHosts(scan.ID)
+	if err != nil {
+		t.Fatalf("list hosts: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].Service == nil || hosts[0].Service.Evidence == nil {
+		t.Fatalf("hosts = %+v", hosts)
+	}
+	if hosts[0].Service.Evidence["login_screen"] != "skipped" {
+		t.Fatalf("login_screen evidence = %#v", hosts[0].Service.Evidence)
+	}
+	if reason := hosts[0].Service.Evidence["login_screen_skip_reason"]; reason == "" ||
+		!strings.Contains(strings.ToLower(reason), "nla") {
+		t.Fatalf("login_screen_skip_reason = %q, want NLA explanation", reason)
 	}
 }
 

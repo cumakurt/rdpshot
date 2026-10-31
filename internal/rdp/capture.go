@@ -87,7 +87,11 @@ func Capture(ctx context.Context, ep model.Endpoint, cred model.Credential, opts
 		return nil, fmt.Errorf("%w: NLA/Hybrid required for Go framebuffer", ErrCaptureUnsupported)
 	}
 
-	tlsConn := tls.Client(raw, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) //nolint:gosec
+	tlsConn := tls.Client(raw, &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec
+		MinVersion:         tls.VersionTLS12,
+		MaxVersion:         tls.VersionTLS12,
+	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("rdp: TLS handshake: %w", err)
 	}

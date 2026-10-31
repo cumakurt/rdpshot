@@ -17,7 +17,9 @@ func TestBuildAuthenticateConsistency(t *testing.T) {
 	timestamp := filetimeFromUnix(1700000000)
 	clientChallenge := []byte{9, 10, 11, 12, 13, 14, 15, 16}
 
-	msg, baseKey, err := BuildAuthenticate(DefaultNegotiateFlags, "Domain", "User", "Password", "WS",
+	// Omit KEY_EXCH so the returned key is the session base key (deterministic).
+	flags := DefaultNegotiateFlags &^ NEGOTIATE_KEY_EXCH
+	msg, baseKey, err := BuildAuthenticate(flags, "Domain", "User", "Password", "WS",
 		serverChallenge, info, timestamp, clientChallenge)
 	if err != nil {
 		t.Fatalf("build: %v", err)

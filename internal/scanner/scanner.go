@@ -518,9 +518,9 @@ func (e *Engine) recordSmartCardFinding(scan *model.Scan, ep model.Endpoint, hos
 		ScanID: scan.ID, HostID: hostID, Address: ep.Address, Port: ep.Port,
 		CheckID: "nla-smartcard-required", Title: "Smart-card logon indicated by NLA",
 		Severity: model.SeverityInfo, Status: model.FindingVulnerable,
-		Evidence: "CredSSP/NLA reported smart-card logon requirement",
+		Evidence:    "CredSSP/NLA reported smart-card logon requirement",
 		Remediation: "Document smart-card requirements in the engagement ROE; password sprays will not succeed against these accounts.",
-		DetectedAt: time.Now().UTC(),
+		DetectedAt:  time.Now().UTC(),
 	}
 	id, err := e.deps.Store.InsertFinding(finding)
 	if err != nil {
@@ -539,19 +539,58 @@ func (e *Engine) recordSmartCardFinding(scan *model.Scan, ep model.Endpoint, hos
 func (e *Engine) captureOpenHostEvidence(ctx context.Context, scan *model.Scan, ep model.Endpoint,
 	hostID int64, svc *model.ServiceInfo, progress *model.Progress, logger *slog.Logger, ocrSeeds *ocrUserSeed) {
 
-	_ = svc
 	if e.deps.LoginScreen == nil || e.deps.LoginScreen.Available() != nil {
 		return
 	}
 	shot, err := e.deps.LoginScreen.GrabLoginScreen(ctx, ep)
 	if err != nil {
+		reason := loginScreenSkipReason(err, svc)
 		logger.Warn("login-screen capture unavailable; skipping screenshot",
-			"error", err.Error())
-		e.log(scan.ID, "warn", fmt.Sprintf("login-screen capture skipped for %s: %v", ep.Key(), err))
+			"error", err.Error(), "reason", reason)
+		e.log(scan.ID, "warn", fmt.Sprintf(
+			"login-screen capture skipped for %s: %s (%v)", ep.Key(), reason, err))
+		e.recordLoginScreenSkip(hostID, reason, logger)
 		return
 	}
 	e.persistScreenshot(scan, hostID, shot, progress, logger)
 	e.recordLoginScreenUsers(ctx, scan, ep, hostID, shot.FilePath, progress, logger, ocrSeeds)
+}
+
+// loginScreenSkipReason maps grabber failures to a short operator-facing cause.
+func loginScreenSkipReason(err error, svc *model.ServiceInfo) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "hybrid"), strings.Contains(msg, "credssp/nla"),
+		strings.Contains(msg, "nla"):
+		return "NLA/CredSSP required: pre-auth Winlogon and account-tile OCR are unreachable"
+	case strings.Contains(msg, "blank"):
+		return "login-screen frame was blank"
+	case svc != nil && svc.NLARequired:
+		return "NLA required by negotiation; pre-auth account tiles unavailable"
+	default:
+		return "pre-auth login UI unreachable"
+	}
+}
+
+// recordLoginScreenSkip persists why login-screen / login_users evidence is absent.
+func (e *Engine) recordLoginScreenSkip(hostID int64, reason string, logger *slog.Logger) {
+	host, err := e.deps.Store.GetHost(hostID)
+	if err != nil {
+		logger.Warn("load host for login-screen skip", "error", err.Error())
+		return
+	}
+	if host.Service == nil {
+		host.Service = &model.ServiceInfo{}
+	}
+	if host.Service.Evidence == nil {
+		host.Service.Evidence = map[string]string{}
+	}
+	host.Service.Evidence["login_screen"] = "skipped"
+	host.Service.Evidence["login_screen_skip_reason"] = reason
+	host.UpdatedAt = time.Now().UTC()
+	if _, err := e.deps.Store.UpsertHost(host); err != nil {
+		logger.Warn("persist login-screen skip reason", "error", err.Error())
+	}
 }
 
 // recordLoginScreenUsers OCRs the Winlogon tile list and persists usernames on

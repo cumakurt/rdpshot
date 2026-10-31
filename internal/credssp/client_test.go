@@ -137,7 +137,11 @@ func runFakeServer(conn net.Conn, cert *x509.Certificate, script fakeServerScrip
 	if err != nil {
 		return err
 	}
-	security := ntlm.NewSessionSecurity(baseKey, ntlm.DefaultNegotiateFlags, false)
+	exported := baseKey
+	if authMsg.Flags&ntlm.NEGOTIATE_KEY_EXCH != 0 && len(authMsg.EncryptedRandomSessionKey) > 0 {
+		exported = ntlm.UnwrapExportedSessionKey(baseKey, authMsg.EncryptedRandomSessionKey)
+	}
+	security := ntlm.NewSessionSecurity(exported, ntlm.DefaultNegotiateFlags, false)
 
 	response := TSRequest{Version: script.version}
 	if script.changeVer {

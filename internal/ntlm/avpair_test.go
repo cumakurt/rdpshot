@@ -2,6 +2,7 @@ package ntlm
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
@@ -80,5 +81,43 @@ func TestWithTargetName(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("target name count = %d, want 1", count)
+	}
+}
+
+func TestEnrichTargetInfoForCredSSP(t *testing.T) {
+	base := MarshalAVPairs([]AVPair{
+		{ID: MsvAvNbComputerName, Data: encodeUTF16LE("HOST")},
+		{ID: MsvAvTimestamp, Data: make([]byte, 8)},
+	})
+	got, err := EnrichTargetInfoForCredSSP(base, "TERMSRV/HOST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs, err := ParseAVPairs(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawCB, sawTarget, sawFlags bool
+	for _, p := range pairs {
+		switch p.ID {
+		case MsvAvChannelBindings:
+			sawCB = true
+			if len(p.Data) != 16 {
+				t.Fatalf("channel bindings len=%d", len(p.Data))
+			}
+		case MsvAvTargetName:
+			sawTarget = true
+			if !bytes.Equal(p.Data, encodeUTF16LE("TERMSRV/HOST")) {
+				t.Fatalf("target=%x", p.Data)
+			}
+		case MsvAvFlags:
+			sawFlags = true
+			if len(p.Data) != 4 || binary.LittleEndian.Uint32(p.Data) != MsvAvFlagsMIC {
+				t.Fatalf("av flags = %x", p.Data)
+			}
+		}
+	}
+	if !sawCB || !sawTarget || !sawFlags {
+		t.Fatalf("missing AV pairs: cb=%v target=%v flags=%v pairs=%+v", sawCB, sawTarget, sawFlags, pairs)
 	}
 }

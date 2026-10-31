@@ -1,9 +1,26 @@
 package ntlm
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 )
+
+// rc4Once encrypts plaintext with a fresh RC4 cipher keyed by key (MS-NLMP
+// EncryptedRandomSessionKey derivation). RC4 is symmetric, so the same helper
+// also recovers the exported session key on the server side.
+func rc4Once(key, plaintext []byte) []byte {
+	c := newRC4(key)
+	out := make([]byte, len(plaintext))
+	c.xorKeyStream(out, plaintext)
+	return out
+}
+
+// UnwrapExportedSessionKey recovers the exported session key from the
+// AUTHENTICATE EncryptedRandomSessionKey field (MS-NLMP 3.4.4).
+func UnwrapExportedSessionKey(sessionBaseKey, encrypted []byte) []byte {
+	return rc4Once(sessionBaseKey, encrypted)
+}
 
 // ClientChallengeLen is the size of the client-chosen nonce used in the
 // NTLMv2 response (MS-NLMP 2.2.1.3.1).
@@ -27,9 +44,9 @@ const TimestampLen = 8
 // The returned session base key is HMAC_MD5(NTLMv2Hash, NTProofStr); the
 // exported session key equals it when key exchange is not negotiated.
 //
-// The MIC field is left nil: computing it requires the raw NEGOTIATE and
-// CHALLENGE bytes and the CredSSP profile used by RDP does not request
-// message integrity (MsvAvFlags bit 0x2 is not set by RDP servers).
+// The MIC field is left nil; callers that set MsvAvFlagsMIC in target info
+// must call SetMIC after BuildAuthenticate with the raw NEGOTIATE and
+// CHALLENGE messages.
 func BuildAuthenticate(flags uint32, domain, user, password, workstation string, serverChallenge [8]byte,
 	targetInfo, timestamp, clientChallenge []byte) (*AuthenticateMessage, []byte, error) {
 	return BuildAuthenticateFromNTHash(flags, domain, user, NTHash(password), workstation,
@@ -58,6 +75,19 @@ func BuildAuthenticateFromNTHash(flags uint32, domain, user string, ntHash []byt
 	ntResponse = append(ntResponse, proof...)
 	ntResponse = append(ntResponse, blob...)
 
+	baseKey := sessionBaseKey(ntLMv2Hash, proof)
+	exported := baseKey
+	var encKey []byte
+	if flags&NEGOTIATE_KEY_EXCH != 0 {
+		// MS-NLMP 3.4.4: client picks a random exported session key and
+		// encrypts it with RC4 keyed by the session base key.
+		exported = make([]byte, 16)
+		if _, err := rand.Read(exported); err != nil {
+			return nil, nil, fmt.Errorf("ntlm: generate exported session key: %w", err)
+		}
+		encKey = rc4Once(baseKey, exported)
+	}
+
 	msg := &AuthenticateMessage{
 		Flags:                     flags,
 		Domain:                    domain,
@@ -65,12 +95,39 @@ func BuildAuthenticateFromNTHash(flags uint32, domain, user string, ntHash []byt
 		Workstation:               workstation,
 		NTChallengeResponse:       ntResponse,
 		LMChallengeResponse:       LMv2Response(clientChallenge, serverChallenge[:], ntLMv2Hash),
-		EncryptedRandomSessionKey: nil,
+		EncryptedRandomSessionKey: encKey,
 	}
 	if flags&NEGOTIATE_VERSION != 0 {
 		msg.Version = newVersion()
 	}
-	return msg, sessionBaseKey(ntLMv2Hash, proof), nil
+	return msg, exported, nil
+}
+
+// SetMIC computes and installs the AUTHENTICATE MIC (MS-NLMP 3.1.5.1.2):
+//
+//	MIC = HMAC_MD5(ExportedSessionKey, NEGOTIATE || CHALLENGE || AUTHENTICATE)
+//
+// AUTHENTICATE is serialized with a zeroed 16-byte MIC field for the hash,
+// then rewritten with the real MIC. negotiate and challenge must be the raw
+// NTLMSSP messages (not SPNEGO wrappers).
+func (m *AuthenticateMessage) SetMIC(exportedSessionKey, negotiate, challenge []byte) error {
+	if m == nil {
+		return fmt.Errorf("ntlm: nil AuthenticateMessage")
+	}
+	if len(exportedSessionKey) != 16 {
+		return fmt.Errorf("ntlm: exported session key must be 16 bytes, got %d", len(exportedSessionKey))
+	}
+	var zero [16]byte
+	m.MIC = &zero
+	withZero, err := m.Marshal()
+	if err != nil {
+		return err
+	}
+	mic := hmacMD5(exportedSessionKey, negotiate, challenge, withZero)
+	var out [16]byte
+	copy(out[:], mic)
+	m.MIC = &out
+	return nil
 }
 
 // ntlmBlob builds the NTLMv2 "blob" from the timestamp, client challenge and
