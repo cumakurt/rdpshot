@@ -426,8 +426,9 @@ var globalDecoy = &decoyState{maxEvents: 500}
 const decoyConfigKey = "settings/decoy_config"
 
 type decoyConfig struct {
-	BindAddr      string `json:"bind_addr"`
-	NotifyWebhook string `json:"notify_webhook,omitempty"`
+	BindAddr      string             `json:"bind_addr"`
+	NotifyWebhook string             `json:"notify_webhook,omitempty"`
+	Profile       decoy.DecoyProfile `json:"profile,omitempty"`
 }
 
 // handleDecoyStart starts the decoy listener.
@@ -467,6 +468,7 @@ func (s *Server) handleDecoyStart(w http.ResponseWriter, r *http.Request) {
 
 	globalDecoy.listener = decoy.New(decoy.Options{
 		BindAddr: cfg.BindAddr,
+		Profile:  cfg.Profile,
 		Logger:   s.deps.Logger,
 		OnEvent: func(ev decoy.DecoyEvent) {
 			// IMPORTANT: do NOT acquire ctrlMu here.
@@ -530,6 +532,55 @@ func (s *Server) handleDecoyStop(w http.ResponseWriter, r *http.Request) {
 
 	s.audit(r, "decoy.stop", "", "")
 	s.writeJSON(w, http.StatusOK, map[string]any{"running": false})
+}
+
+// handleDecoyGetProfile returns the stored decoy profile.
+//
+//	GET /api/v1/decoy/profile
+func (s *Server) handleDecoyGetProfile(w http.ResponseWriter, r *http.Request) {
+	raw, _ := s.deps.Store.GetSettingJSON(decoyConfigKey)
+	var cfg decoyConfig
+	if raw != nil {
+		_ = json.Unmarshal(raw, &cfg)
+	}
+	if cfg.BindAddr == "" {
+		cfg.BindAddr = "0.0.0.0:13389"
+	}
+	if cfg.Profile.HostName == "" {
+		cfg.Profile.HostName = "WIN-RDPSHOT01"
+		cfg.Profile.Organization = "Microsoft Corporation"
+		cfg.Profile.WindowsVersion = "2019"
+		cfg.Profile.Domain = "WORKGROUP"
+		cfg.Profile.DesktopWidth = 1024
+		cfg.Profile.DesktopHeight = 768
+		cfg.Profile.WallpaperColor = "#1a3a5c"
+		cfg.Profile.LoginMessage = "This computer is for authorized use only."
+	}
+	s.writeJSON(w, http.StatusOK, cfg)
+}
+
+// handleDecoyPutProfile saves the decoy configuration and profile.
+//
+//	PUT /api/v1/decoy/profile
+func (s *Server) handleDecoyPutProfile(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWrite(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	var cfg decoyConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		s.writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if cfg.BindAddr == "" {
+		cfg.BindAddr = "0.0.0.0:13389"
+	}
+	if err := s.deps.Store.SetSettingJSON(decoyConfigKey, cfg); err != nil {
+		s.internalError(w, r, "save decoy profile", err)
+		return
+	}
+	s.audit(r, "decoy.profile.update", cfg.BindAddr, "")
+	s.writeJSON(w, http.StatusOK, cfg)
 }
 
 // handleDecoyStatus returns the current listener status.

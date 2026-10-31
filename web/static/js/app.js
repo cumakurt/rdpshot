@@ -3618,15 +3618,93 @@ function initDecoyListener() {
 
   var stopBtn      = document.getElementById('decoyStopBtn');
   var refreshBtn   = document.getElementById('decoyRefreshBtn');
+  var saveBtn      = document.getElementById('decoySaveBtn');
+  var clearBtn     = document.getElementById('decoyClearBtn');
+  var saveStatus   = document.getElementById('decoySaveStatus');
   var statusVal    = document.getElementById('decoyStatusValue');
   var statusCard   = document.getElementById('decoyStatusCard');
   var eventCount   = document.getElementById('decoyEventCount');
+  var credCount    = document.getElementById('decoyCredCount');
   var bindDisplay  = document.getElementById('decoyBindAddr');
   var tbody        = document.getElementById('decoyEventsTbody');
-  var bindInput    = document.getElementById('decoyBindInput');
-  var webhookInput = document.getElementById('decoyWebhookInput');
-  var pollTimer    = null;
+  var configToggle = document.getElementById('decoyConfigToggle');
+  var configPanel  = document.getElementById('decoyConfigPanel');
+  var configArrow  = document.getElementById('decoyConfigArrow');
 
+  // Config inputs
+  var cfgBind         = document.getElementById('cfgBind');
+  var cfgWebhook      = document.getElementById('cfgWebhook');
+  var cfgHostName     = document.getElementById('cfgHostName');
+  var cfgOrg          = document.getElementById('cfgOrg');
+  var cfgDomain       = document.getElementById('cfgDomain');
+  var cfgWinVer       = document.getElementById('cfgWinVer');
+  var cfgWidth        = document.getElementById('cfgWidth');
+  var cfgHeight       = document.getElementById('cfgHeight');
+  var cfgBgColor      = document.getElementById('cfgBgColor');
+  var cfgBgColorPicker= document.getElementById('cfgBgColorPicker');
+  var cfgLoginMsg     = document.getElementById('cfgLoginMsg');
+  var cfgFullHandshake= document.getElementById('cfgFullHandshake');
+
+  var pollTimer = null;
+
+  // ── Toggle config panel ──────────────────────────────────────────────────
+  if (configToggle) {
+    configToggle.addEventListener('click', function () {
+      var hidden = configPanel.style.display === 'none';
+      configPanel.style.display = hidden ? '' : 'none';
+      if (configArrow) configArrow.style.transform = hidden ? '' : 'rotate(-90deg)';
+    });
+  }
+
+  // ── Color picker sync ────────────────────────────────────────────────────
+  if (cfgBgColorPicker && cfgBgColor) {
+    cfgBgColorPicker.addEventListener('input', function () { cfgBgColor.value = cfgBgColorPicker.value; });
+    cfgBgColor.addEventListener('input', function () {
+      if (/^#[0-9a-fA-F]{6}$/.test(cfgBgColor.value)) cfgBgColorPicker.value = cfgBgColor.value;
+    });
+  }
+
+  // ── Load stored profile ──────────────────────────────────────────────────
+  fetch('/api/v1/decoy/profile')
+    .then(function (r) { return r.json(); })
+    .then(function (cfg) { applyProfileToForm(cfg); })
+    .catch(function () {});
+
+  function applyProfileToForm(cfg) {
+    if (!cfg) return;
+    if (cfgBind && cfg.bind_addr)           cfgBind.value           = cfg.bind_addr;
+    if (cfgWebhook && cfg.notify_webhook)   cfgWebhook.value        = cfg.notify_webhook;
+    var p = cfg.profile || {};
+    if (cfgHostName && p.host_name)         cfgHostName.value       = p.host_name;
+    if (cfgOrg && p.organization)           cfgOrg.value            = p.organization;
+    if (cfgDomain && p.domain)              cfgDomain.value         = p.domain;
+    if (cfgWinVer && p.windows_version)     cfgWinVer.value         = p.windows_version;
+    if (cfgWidth && p.desktop_width)        cfgWidth.value          = p.desktop_width;
+    if (cfgHeight && p.desktop_height)      cfgHeight.value         = p.desktop_height;
+    if (cfgBgColor && p.wallpaper_color)  { cfgBgColor.value = p.wallpaper_color; if (cfgBgColorPicker) cfgBgColorPicker.value = p.wallpaper_color; }
+    if (cfgLoginMsg && p.login_message)     cfgLoginMsg.value       = p.login_message;
+    if (cfgFullHandshake)                   cfgFullHandshake.checked = !!p.enable_full_handshake;
+  }
+
+  function buildPayload() {
+    return {
+      bind_addr:       cfgBind        ? cfgBind.value        : '0.0.0.0:13389',
+      notify_webhook:  cfgWebhook     ? cfgWebhook.value     : '',
+      profile: {
+        host_name:            cfgHostName     ? cfgHostName.value      : 'WIN-RDPSHOT01',
+        organization:         cfgOrg          ? cfgOrg.value           : 'Microsoft Corporation',
+        domain:               cfgDomain       ? cfgDomain.value        : 'WORKGROUP',
+        windows_version:      cfgWinVer       ? cfgWinVer.value        : '2019',
+        desktop_width:        cfgWidth        ? parseInt(cfgWidth.value,10)||1024  : 1024,
+        desktop_height:       cfgHeight       ? parseInt(cfgHeight.value,10)||768  : 768,
+        wallpaper_color:      cfgBgColor      ? cfgBgColor.value       : '#1a3a5c',
+        login_message:        cfgLoginMsg     ? cfgLoginMsg.value      : '',
+        enable_full_handshake: cfgFullHandshake ? cfgFullHandshake.checked : false
+      }
+    };
+  }
+
+  // ── Status helper ────────────────────────────────────────────────────────
   function setRunning(running, bindAddr) {
     if (statusVal)   statusVal.textContent = running ? 'RUNNING' : 'STOPPED';
     if (statusCard)  statusCard.style.borderTop = running ? '3px solid #22c55e' : '3px solid #6b7280';
@@ -3655,15 +3733,13 @@ function initDecoyListener() {
   function refreshEvents() {
     fetch('/api/v1/decoy/events')
       .then(function (r) { return r.json(); })
-      .then(function (d) { renderDecoyEvents(d.events || [], d.count || 0, tbody, eventCount); })
+      .then(function (d) { renderDecoyEvents(d.events || [], d.count || 0, tbody, eventCount, credCount); })
       .catch(function () {});
   }
 
+  // ── Start ────────────────────────────────────────────────────────────────
   startBtn.addEventListener('click', function () {
-    var payload = {
-      bind_addr:       (bindInput    ? bindInput.value    : '') || '0.0.0.0:13389',
-      notify_webhook:  (webhookInput ? webhookInput.value : '') || ''
-    };
+    var payload = buildPayload();
     startBtn.disabled    = true;
     startBtn.textContent = 'Starting...';
     fetch('/api/v1/decoy/start', {
@@ -3674,11 +3750,7 @@ function initDecoyListener() {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         startBtn.textContent = 'Start Listener';
-        if (d.error) {
-          alert('Error: ' + d.error);
-          startBtn.disabled = false;
-          return;
-        }
+        if (d.error) { alert('Error: ' + d.error); startBtn.disabled = false; return; }
         setRunning(true, d.bind_addr);
         refreshEvents();
       })
@@ -3689,6 +3761,7 @@ function initDecoyListener() {
       });
   });
 
+  // ── Stop ─────────────────────────────────────────────────────────────────
   if (stopBtn) {
     stopBtn.addEventListener('click', function () {
       stopBtn.disabled = true;
@@ -3698,43 +3771,84 @@ function initDecoyListener() {
     });
   }
 
-  if (refreshBtn) {
-    refreshBtn.addEventListener('click', refreshEvents);
+  // ── Save Profile ─────────────────────────────────────────────────────────
+  if (saveBtn) {
+    saveBtn.addEventListener('click', function () {
+      saveBtn.disabled = true;
+      if (saveStatus) saveStatus.textContent = 'Saving...';
+      fetch('/api/v1/decoy/profile', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(buildPayload())
+      })
+        .then(function (r) { return r.json(); })
+        .then(function () {
+          if (saveStatus) saveStatus.textContent = 'Saved.';
+          setTimeout(function () { if (saveStatus) saveStatus.textContent = ''; }, 2000);
+        })
+        .catch(function () { if (saveStatus) saveStatus.textContent = 'Save failed.'; })
+        .finally(function () { saveBtn.disabled = false; });
+    });
   }
+
+  // ── Clear Events (client-side only) ──────────────────────────────────────
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function () {
+      if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:2rem;opacity:0.5">Events cleared. New connections will appear here.</td></tr>';
+      }
+      if (eventCount) eventCount.textContent = '0';
+      if (credCount)  credCount.textContent  = '0';
+    });
+  }
+
+  if (refreshBtn) refreshBtn.addEventListener('click', refreshEvents);
 
   refreshStatus();
   refreshEvents();
 }
 
-function renderDecoyEvents(events, count, tbody, eventCount) {
+
+function renderDecoyEvents(events, count, tbody, eventCount, credCount) {
   if (eventCount) eventCount.textContent = count;
   if (!tbody) return;
   if (!events || events.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;opacity:0.5">No connections captured yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:2rem;opacity:0.5">No connections captured yet.</td></tr>';
     return;
   }
 
-  var stageColors = { tcp: '#6b7280', rdp_neg: '#f59e0b', tls: '#3b82f6', ntlm: '#ef4444' };
+  if (credCount) {
+    var creds = events.filter(function (e) { return e.full_auth_attempt || e.captured_username; }).length;
+    credCount.textContent = creds;
+  }
+
+  var stageColors = {
+    tcp: '#6b7280', rdp_neg: '#f59e0b', tls: '#3b82f6',
+    ntlm: '#8b5cf6', credssp_auth: '#ef4444', mcs_active: '#22c55e'
+  };
 
   tbody.innerHTML = events.map(function (ev) {
-    var stageColor = stageColors[ev.stage] || '#9ca3af';
-    var stageBadge = '<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:0.7rem;font-weight:700;background:' +
-      stageColor + ';color:#fff">' + escHtml(ev.stage || '-') + '</span>';
-
-    return '<tr>' +
-      '<td style="font-family:monospace;font-size:0.72rem;white-space:nowrap">' + escHtml(ev.at) + '</td>' +
-      '<td style="font-family:monospace;font-weight:700;color:#ef4444">' + escHtml(ev.remote_ip || '-') + '</td>' +
-      '<td style="font-family:monospace;font-size:0.75rem">' + escHtml(ev.remote_port || '-') + '</td>' +
-      '<td>' + stageBadge + '</td>' +
-      '<td style="font-size:0.75rem;white-space:nowrap">' + escHtml(ev.tls_version || '-') +
-        (ev.tls_cipher ? '<br><span style="opacity:0.5;font-size:0.65rem">' + escHtml(ev.tls_cipher) + '</span>' : '') + '</td>' +
-      '<td style="font-family:monospace;font-size:0.72rem">' +
-        (ev.rdp_cookie ? '<span style="color:#f59e0b">' + escHtml(ev.rdp_cookie) + '</span>' : '<span style="opacity:0.35">-</span>') + '</td>' +
-      '<td>' + (ev.ntlm_domain ? '<span style="font-weight:600">' + escHtml(ev.ntlm_domain) + '</span>' : '<span style="opacity:0.35">-</span>') + '</td>' +
-      '<td>' + (ev.ntlm_workstation ? '<span style="color:#a78bfa;font-weight:600">' + escHtml(ev.ntlm_workstation) + '</span>' : '<span style="opacity:0.35">-</span>') + '</td>' +
-      '<td style="font-family:monospace;font-size:0.65rem;opacity:0.6">' + escHtml(ev.ntlm_flags || '-') + '</td>' +
-      '<td style="font-family:monospace;font-size:0.65rem;opacity:0.45;max-width:120px;overflow:hidden;text-overflow:ellipsis">' +
-        escHtml((ev.raw || '').substring(0, 32)) + (ev.raw && ev.raw.length > 32 ? '...' : '') + '</td>' +
+    var sc = stageColors[ev.stage] || '#9ca3af';
+    var sb = '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-weight:700;background:' + sc + ';color:#fff">' + escHtml(ev.stage||'-') + '</span>';
+    var uc = ev.captured_username ? '<span style="font-weight:700;color:#ef4444">' + escHtml(ev.captured_username) + '</span>' : (ev.ntlm_workstation ? '<span style="opacity:0.5;font-size:0.8rem">' + escHtml(ev.ntlm_workstation) + '</span>' : '<span style="opacity:0.3">&#8212;</span>');
+    var dc = ev.captured_domain ? '<span style="font-weight:700;color:#ef4444">' + escHtml(ev.captured_domain) + '</span>' : (ev.ntlm_domain ? '<span style="opacity:0.6">' + escHtml(ev.ntlm_domain) + '</span>' : '<span style="opacity:0.3">&#8212;</span>');
+    var pc = ev.captured_password ? '<span style="font-weight:700;color:#ef4444;background:rgba(239,68,68,0.08);padding:1px 6px;border-radius:4px">' + escHtml(ev.captured_password) + '</span>' : '<span style="opacity:0.3">&#8212;</span>';
+    var hc = ev.nt_hash ? '<span style="font-family:monospace;font-size:0.65rem;color:#f59e0b">' + escHtml(ev.nt_hash.substring(0,16)) + '&hellip;</span>' : '<span style="opacity:0.3">&#8212;</span>';
+    var tc = ev.tls_version ? escHtml(ev.tls_version) + (ev.tls_cipher ? '<br><span style="opacity:0.45;font-size:0.62rem">' + escHtml(ev.tls_cipher.replace('TLS_','').substring(0,20)) + '</span>' : '') : '<span style="opacity:0.3">&#8212;</span>';
+    return '<tr' + (ev.full_auth_attempt ? ' style="background:rgba(239,68,68,0.05)"' : '') + '>' +
+      '<td style="font-family:monospace;font-size:0.7rem;white-space:nowrap">' + escHtml(ev.at) + '</td>' +
+      '<td style="font-family:monospace;font-weight:700;color:#ef4444">' + escHtml(ev.remote_ip||'-') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.75rem;opacity:0.7">' + escHtml(ev.remote_port||'-') + '</td>' +
+      '<td>' + sb + '</td><td>' + uc + '</td><td>' + dc + '</td><td>' + pc + '</td><td>' + hc + '</td>' +
+      '<td style="font-size:0.72rem">' + tc + '</td>' +
+      '<td style="font-family:monospace;font-size:0.7rem;color:#f59e0b">' + (ev.rdp_cookie ? escHtml(ev.rdp_cookie) : '<span style="opacity:0.3">&#8212;</span>') + '</td>' +
+      '<td style="font-size:0.75rem;color:#a78bfa">' + (ev.ntlm_workstation ? escHtml(ev.ntlm_workstation) : '<span style="opacity:0.3">&#8212;</span>') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.62rem;opacity:0.5">' + escHtml(ev.ntlm_flags||'-') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.62rem;opacity:0.4;max-width:100px;overflow:hidden;text-overflow:ellipsis">' + escHtml((ev.raw||'').substring(0,24)) + '</td>' +
     '</tr>';
   }).join('');
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }

@@ -44,11 +44,21 @@ type DecoyEvent struct {
 	NTLMWorkstation string `json:"ntlm_workstation,omitempty"`
 	// NTLMFlags are the raw NTLM negotiate flags (hex).
 	NTLMFlags string `json:"ntlm_flags,omitempty"`
+	// CapturedUsername is the real username from NTLM Type 3 Authenticate.
+	CapturedUsername string `json:"captured_username,omitempty"`
+	// CapturedDomain is the real domain from NTLM Type 3 Authenticate.
+	CapturedDomain string `json:"captured_domain,omitempty"`
+	// CapturedPassword is the cleartext password if captured via non-NLA (ClientInfo PDU).
+	CapturedPassword string `json:"captured_password,omitempty"`
+	// NTHash is the hex-encoded NT response from NTLM Type 3 (for offline cracking).
+	NTHash string `json:"nt_hash,omitempty"`
+	// FullAuthAttempt is true when a full NTLM Type 3 handshake was captured.
+	FullAuthAttempt bool `json:"full_auth_attempt"`
 	// TLSVersion is the TLS version negotiated (if TLS handshake succeeded).
 	TLSVersion string `json:"tls_version,omitempty"`
 	// TLSCipher is the cipher suite negotiated.
 	TLSCipher string `json:"tls_cipher,omitempty"`
-	// Stage indicates how far the attacker progressed: "tcp", "rdp_neg", "tls", "ntlm"
+	// Stage indicates how far the attacker progressed: "tcp", "rdp_neg", "tls", "ntlm", "credssp_auth", "mcs_active"
 	Stage string `json:"stage"`
 	// RDPCookie is the mstshash= cookie from the X.224 Connection Request, if present.
 	RDPCookie string `json:"rdp_cookie,omitempty"`
@@ -56,10 +66,36 @@ type DecoyEvent struct {
 	Raw string `json:"raw,omitempty"`
 }
 
+// DecoyProfile configures the fake RDP server appearance.
+type DecoyProfile struct {
+	// HostName is the Windows hostname shown in the TLS certificate CN.
+	HostName string `json:"host_name"`
+	// Organization is the TLS certificate O field.
+	Organization string `json:"organization"`
+	// WindowsVersion advertised in the RDP server core data block.
+	// "2019" = Windows Server 2019, "2022" = Windows Server 2022, "2016" = 2016, "2012r2" = 2012 R2
+	WindowsVersion string `json:"windows_version"`
+	// Domain is the NetBIOS/DNS domain the fake server claims to belong to.
+	Domain string `json:"domain"`
+	// DesktopWidth / DesktopHeight of the fake screen.
+	DesktopWidth  uint16 `json:"desktop_width"`
+	DesktopHeight uint16 `json:"desktop_height"`
+	// WallpaperColor is the background color of the fake login screen (hex, e.g. "#1a3a5c").
+	WallpaperColor string `json:"wallpaper_color"`
+	// LoginMessage is the custom message shown on the fake login screen.
+	LoginMessage string `json:"login_message"`
+	// EnableFullHandshake controls whether the server completes the full MCS + bitmap flow.
+	// When false (default passive mode), the server only captures NTLM credentials and disconnects.
+	// When true (interactive mode), it completes MCS, sends a fake login screen, and captures more data.
+	EnableFullHandshake bool `json:"enable_full_handshake"`
+}
+
 // Options configures the decoy listener.
 type Options struct {
 	// BindAddr is "address:port", e.g. "0.0.0.0:3389".
 	BindAddr string
+	// Profile controls the fake server's appearance and behaviour.
+	Profile DecoyProfile
 	// Hooks
 	OnEvent func(DecoyEvent)
 	Logger  *slog.Logger
@@ -184,7 +220,7 @@ var rdpConnConfirm = []byte{
 
 func (l *Listener) handle(conn net.Conn) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 
 	remoteAddr := conn.RemoteAddr().String()
 	remoteIP, remotePort, _ := net.SplitHostPort(remoteAddr)
@@ -193,7 +229,6 @@ func (l *Listener) handle(conn net.Conn) {
 	buf := make([]byte, 512)
 	n, err := conn.Read(buf)
 	if err != nil || n < 4 {
-		// Still record the bare TCP knock.
 		l.fireEvent(DecoyEvent{
 			RemoteAddr: remoteAddr, RemoteIP: remoteIP, RemotePort: remotePort,
 			Stage: "tcp",
@@ -213,8 +248,17 @@ func (l *Listener) handle(conn net.Conn) {
 		return
 	}
 
-	// ── Step 3: upgrade to TLS so CredSSP traffic flows ──────────────────────
-	cert, err := selfSignedCert()
+	// ── Step 3: upgrade to TLS ──────────────────────────────────────────────
+	p := l.opts.Profile
+	cn := p.HostName
+	if cn == "" {
+		cn = "WIN-RDPSHOT01"
+	}
+	org := p.Organization
+	if org == "" {
+		org = "Microsoft Corporation"
+	}
+	cert, err := selfSignedCertFor(cn, org)
 	if err != nil {
 		l.logger.Warn("decoy: failed to generate cert", "err", err)
 		return
@@ -225,7 +269,6 @@ func (l *Listener) handle(conn net.Conn) {
 	}
 	tlsConn := tls.Server(conn, tlsCfg)
 	if err := tlsConn.Handshake(); err != nil {
-		// TLS handshake failed — attacker sent raw RDP without TLS.
 		l.fireEvent(DecoyEvent{
 			RemoteAddr: remoteAddr, RemoteIP: remoteIP, RemotePort: remotePort,
 			Stage: "rdp_neg", RDPCookie: rdpCookie, Raw: rawHex,
@@ -234,49 +277,43 @@ func (l *Listener) handle(conn net.Conn) {
 	}
 	defer tlsConn.Close()
 
-	// Extract TLS details.
 	cs := tlsConn.ConnectionState()
 	tlsVersion := tlsVersionName(cs.Version)
 	tlsCipher := tls.CipherSuiteName(cs.CipherSuite)
 
-	// ── Step 4: read NTLM / CredSSP NTLM Negotiate ───────────────────────────
-	_ = tlsConn.SetDeadline(time.Now().Add(8 * time.Second))
-	nbuf := make([]byte, 4096)
-	nn, err := tlsConn.Read(nbuf)
-	ntlmUser, ntlmDomain, ntlmWorkstation, ntlmFlags := "", "", "", ""
-	stage := "tls"
-	if err == nil && nn > 0 {
-		ntlmUser, ntlmDomain, ntlmWorkstation, ntlmFlags = parseNTLMNegotiateFull(nbuf[:nn])
-		if ntlmUser != "" || ntlmDomain != "" || ntlmWorkstation != "" {
-			stage = "ntlm"
-		}
+	// ── Step 4: CredSSP NTLM handshake ───────────────────────────────────────
+	ev := DecoyEvent{
+		RemoteAddr:  remoteAddr,
+		RemoteIP:    remoteIP,
+		RemotePort:  remotePort,
+		TLSVersion:  tlsVersion,
+		TLSCipher:   tlsCipher,
+		Stage:       "tls",
+		RDPCookie:   rdpCookie,
+		Raw:         rawHex,
+	}
+
+	domain := p.Domain
+	if domain == "" {
+		domain = "WORKGROUP"
+	}
+
+	captureCredSSP(tlsConn, domain, &ev, l.logger)
+
+	// If full handshake is enabled, continue into the MCS/bitmap session.
+	if l.opts.Profile.EnableFullHandshake && ev.Stage == "credssp_auth" {
+		runInteractiveSession(tlsConn, l.opts.Profile, &ev, l.logger)
 	}
 
 	l.logger.Warn("decoy: attacker connection",
 		"remote_ip", remoteIP,
-		"remote_port", remotePort,
-		"stage", stage,
-		"tls_version", tlsVersion,
-		"ntlm_user", ntlmUser,
-		"ntlm_domain", ntlmDomain,
-		"ntlm_workstation", ntlmWorkstation,
-		"rdp_cookie", rdpCookie,
+		"stage", ev.Stage,
+		"captured_user", ev.CapturedUsername,
+		"captured_domain", ev.CapturedDomain,
+		"full_auth", ev.FullAuthAttempt,
 	)
 
-	l.fireEvent(DecoyEvent{
-		RemoteAddr:      remoteAddr,
-		RemoteIP:        remoteIP,
-		RemotePort:      remotePort,
-		NTLMUsername:    ntlmUser,
-		NTLMDomain:      ntlmDomain,
-		NTLMWorkstation: ntlmWorkstation,
-		NTLMFlags:       ntlmFlags,
-		TLSVersion:      tlsVersion,
-		TLSCipher:       tlsCipher,
-		Stage:           stage,
-		RDPCookie:       rdpCookie,
-		Raw:             rawHex,
-	})
+	l.fireEvent(ev)
 }
 
 func (l *Listener) fireEvent(ev DecoyEvent) {
@@ -394,6 +431,16 @@ func decodeUTF16LE(b []byte) string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func selfSignedCert() (tls.Certificate, error) {
+	return selfSignedCertFor("WIN-RDPSHOT01", "RDPShot Decoy")
+}
+
+func selfSignedCertFor(cn, org string) (tls.Certificate, error) {
+	if cn == "" {
+		cn = "WIN-RDPSHOT01"
+	}
+	if org == "" {
+		org = "Microsoft Corporation"
+	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -401,11 +448,11 @@ func selfSignedCert() (tls.Certificate, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			CommonName:   "RDPSHOT-DECOY",
-			Organization: []string{"RDPShot Decoy"},
+			CommonName:   cn,
+			Organization: []string{org},
 		},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		NotBefore:             time.Now().Add(-24 * time.Hour),
+		NotAfter:              time.Now().Add(2 * 365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,

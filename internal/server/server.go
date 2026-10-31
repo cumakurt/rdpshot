@@ -354,6 +354,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/decoy/stop", s.handleDecoyStop)
 	mux.HandleFunc("GET /api/v1/decoy/status", s.handleDecoyStatus)
 	mux.HandleFunc("GET /api/v1/decoy/events", s.handleDecoyEvents)
+	mux.HandleFunc("GET /api/v1/decoy/profile", s.handleDecoyGetProfile)
+	mux.HandleFunc("PUT /api/v1/decoy/profile", s.handleDecoyPutProfile)
 	mux.HandleFunc("GET /decoy", s.handleDecoyPage)
 
 	// Catch-all: unknown paths render the small HTML error page (or JSON when

@@ -11,69 +11,151 @@
         <div>
           <p class="page-eyebrow">Active Defense</p>
           <h1 class="page-title mt-1">Decoy / Honeypot Listener</h1>
-          <p class="page-subtitle">Simulate a vulnerable RDP endpoint to detect internal attackers. Every connection attempt fires a SIEM alert.</p>
+          <p class="page-subtitle">Simulate a vulnerable Windows RDP server. Captures credentials, NTLM hashes and connection metadata from attackers.</p>
         </div>
       </section>
 
       <!-- Status KPIs -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div class="stat-card" id="decoyStatusCard">
-          <div class="stat-value" id="decoyStatusValue">—</div>
+          <div class="stat-value" id="decoyStatusValue" style="font-size:1.1rem">—</div>
           <div class="stat-label">Listener Status</div>
         </div>
         <div class="stat-card">
           <div class="stat-value" id="decoyEventCount">0</div>
-          <div class="stat-label">Connections Captured</div>
+          <div class="stat-label">Connections</div>
+        </div>
+        <div class="stat-card" style="border-top:3px solid #ef4444">
+          <div class="stat-value text-red-500" id="decoyCredCount">0</div>
+          <div class="stat-label">Credentials Captured</div>
         </div>
         <div class="stat-card">
-          <div class="stat-value" id="decoyBindAddr" style="font-size:1rem">—</div>
+          <div class="stat-value" id="decoyBindAddr" style="font-size:0.9rem">—</div>
           <div class="stat-label">Bind Address</div>
         </div>
       </div>
 
-      <!-- Control Panel -->
-      <section class="card mb-6">
-        <h2 class="card-title" style="padding:1rem 1rem 0">Listener Configuration</h2>
-        <div style="padding:1rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem">
-          <div>
-            <label class="label" for="decoyBindInput">Bind Address</label>
-            <input id="decoyBindInput" class="input" type="text" value="0.0.0.0:13389" placeholder="0.0.0.0:13389">
-            <p style="font-size:0.75rem;margin-top:4px;opacity:0.55">Use a non-standard port (e.g. 13389) to avoid OS conflicts unless you have root/admin access.</p>
+      <!-- Configuration accordion -->
+      <section class="card mb-4">
+        <button id="decoyConfigToggle" class="w-full text-left p-4 font-semibold flex items-center justify-between" style="background:none;border:none;cursor:pointer">
+          <span>Server Configuration &amp; Profile</span>
+          <span id="decoyConfigArrow" style="transition:transform .2s">▼</span>
+        </button>
+        <div id="decoyConfigPanel" style="padding:0 1rem 1rem">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+
+            <!-- Network -->
+            <fieldset class="card" style="padding:1rem;border:1px solid var(--border-color,#e5e7eb)">
+              <legend style="font-weight:600;font-size:0.8rem;text-transform:uppercase;letter-spacing:.06em;padding:0 4px">Network</legend>
+              <div class="mt-2">
+                <label class="label" for="cfgBind">Bind Address</label>
+                <input id="cfgBind" class="input" type="text" value="0.0.0.0:13389" placeholder="0.0.0.0:13389">
+              </div>
+              <div class="mt-2">
+                <label class="label" for="cfgWebhook">Alert Webhook URL</label>
+                <input id="cfgWebhook" class="input" type="url" placeholder="https://hooks.slack.com/...">
+              </div>
+            </fieldset>
+
+            <!-- Server Identity -->
+            <fieldset class="card" style="padding:1rem;border:1px solid var(--border-color,#e5e7eb)">
+              <legend style="font-weight:600;font-size:0.8rem;text-transform:uppercase;letter-spacing:.06em;padding:0 4px">Server Identity (TLS Cert)</legend>
+              <div class="mt-2">
+                <label class="label" for="cfgHostName">Host Name (CN)</label>
+                <input id="cfgHostName" class="input" type="text" value="WIN-RDPSHOT01" placeholder="WIN-SERVER2022">
+                <p class="text-xs opacity-50 mt-1">Appears in the TLS certificate subject.</p>
+              </div>
+              <div class="mt-2">
+                <label class="label" for="cfgOrg">Organization (O)</label>
+                <input id="cfgOrg" class="input" type="text" value="Microsoft Corporation" placeholder="Acme Corp">
+              </div>
+              <div class="mt-2">
+                <label class="label" for="cfgDomain">AD Domain</label>
+                <input id="cfgDomain" class="input" type="text" value="WORKGROUP" placeholder="corp.local">
+                <p class="text-xs opacity-50 mt-1">Advertised in NTLM Type 2 Challenge.</p>
+              </div>
+              <div class="mt-2">
+                <label class="label" for="cfgWinVer">Windows Version</label>
+                <select id="cfgWinVer" class="input">
+                  <option value="2022">Windows Server 2022</option>
+                  <option value="2019" selected>Windows Server 2019</option>
+                  <option value="2016">Windows Server 2016</option>
+                  <option value="2012r2">Windows Server 2012 R2</option>
+                </select>
+              </div>
+            </fieldset>
+
+            <!-- Screen & Behavior -->
+            <fieldset class="card" style="padding:1rem;border:1px solid var(--border-color,#e5e7eb)">
+              <legend style="font-weight:600;font-size:0.8rem;text-transform:uppercase;letter-spacing:.06em;padding:0 4px">Screen &amp; Behaviour</legend>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <div>
+                  <label class="label" for="cfgWidth">Width</label>
+                  <input id="cfgWidth" class="input" type="number" value="1024" min="640" max="1920">
+                </div>
+                <div>
+                  <label class="label" for="cfgHeight">Height</label>
+                  <input id="cfgHeight" class="input" type="number" value="768" min="480" max="1080">
+                </div>
+              </div>
+              <div class="mt-2">
+                <label class="label" for="cfgBgColor">Wallpaper Color</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <input id="cfgBgColorPicker" type="color" value="#1a3a5c" style="height:36px;width:48px;padding:2px;border-radius:4px;cursor:pointer">
+                  <input id="cfgBgColor" class="input" type="text" value="#1a3a5c" style="flex:1">
+                </div>
+              </div>
+              <div class="mt-2">
+                <label class="label" for="cfgLoginMsg">Login Screen Message</label>
+                <textarea id="cfgLoginMsg" class="input" rows="2" placeholder="This computer is for authorized use only.">This computer is for authorized use only.</textarea>
+              </div>
+              <div class="mt-3 flex items-center gap-2">
+                <input type="checkbox" id="cfgFullHandshake" style="width:16px;height:16px">
+                <label for="cfgFullHandshake" style="font-size:0.85rem;cursor:pointer">
+                  <strong>Interactive Mode</strong> — complete full MCS handshake &amp; show fake screen
+                </label>
+              </div>
+              <p class="text-xs opacity-50 mt-1">When enabled, the decoy completes the RDP session to capture more data including typed input.</p>
+            </fieldset>
           </div>
-          <div>
-            <label class="label" for="decoyWebhookInput">Alert Webhook URL (optional)</label>
-            <input id="decoyWebhookInput" class="input" type="url" placeholder="https://hooks.slack.com/...">
-            <p style="font-size:0.75rem;margin-top:4px;opacity:0.55">Fires a critical alert on every attacker connection. Supports Slack, Discord, Teams, and generic JSON.</p>
+
+          <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
+            <button id="decoyStartBtn" class="btn btn-primary">Start Listener</button>
+            <button id="decoyStopBtn" class="btn" style="background:#ef4444;color:#fff;opacity:0.4;cursor:not-allowed" disabled>Stop Listener</button>
+            <button id="decoySaveBtn" class="btn btn-secondary">Save Profile</button>
+            <span id="decoySaveStatus" style="font-size:0.8rem;opacity:0.6"></span>
+            <button id="decoyRefreshBtn" class="btn btn-secondary" style="margin-left:auto">Refresh Events</button>
           </div>
-        </div>
-        <div style="padding:0 1rem 1rem;display:flex;gap:0.75rem;flex-wrap:wrap">
-          <button id="decoyStartBtn" class="btn btn-primary">Start Listener</button>
-          <button id="decoyStopBtn" class="btn" style="background:#ef4444;color:#fff;opacity:0.4;cursor:not-allowed" disabled>Stop Listener</button>
-          <button id="decoyRefreshBtn" class="btn btn-secondary" style="margin-left:auto">Refresh Events</button>
         </div>
       </section>
 
       <!-- Events Table -->
       <section class="card">
-        <h2 class="card-title" style="padding:1rem 1rem 0.5rem">Captured Attacker Connections</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1rem 0.5rem">
+          <h2 class="card-title">Captured Connections &amp; Credentials</h2>
+          <button id="decoyClearBtn" class="btn btn-secondary" style="font-size:0.75rem;padding:4px 10px">Clear Events</button>
+        </div>
         <div style="overflow-x:auto">
-          <table class="data-table">
+          <table class="data-table" id="decoyEventsTable">
             <thead>
               <tr>
-                <th>Timestamp</th>
+                <th>Timestamp (UTC)</th>
                 <th>Remote IP</th>
                 <th>Port</th>
                 <th>Stage</th>
+                <th style="color:#ef4444">Captured User</th>
+                <th style="color:#ef4444">Captured Domain</th>
+                <th style="color:#ef4444">Password</th>
+                <th style="color:#f59e0b">NT Hash</th>
                 <th>TLS</th>
                 <th>RDP Cookie</th>
-                <th>NTLM Domain</th>
                 <th>NTLM Workstation</th>
                 <th>NTLM Flags</th>
                 <th>Raw (hex)</th>
               </tr>
             </thead>
             <tbody id="decoyEventsTbody">
-              <tr><td colspan="10" style="text-align:center;padding:2rem;opacity:0.5">No connections captured yet.</td></tr>
+              <tr><td colspan="13" style="text-align:center;padding:2rem;opacity:0.5">No connections captured yet. Start the listener to begin.</td></tr>
             </tbody>
           </table>
         </div>
