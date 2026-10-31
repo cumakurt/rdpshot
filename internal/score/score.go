@@ -9,11 +9,11 @@ import (
 
 // RuleResult is one hardening control evaluation.
 type RuleResult struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Passed  bool   `json:"passed"`
-	Weight  int    `json:"weight"`
-	Detail  string `json:"detail,omitempty"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Passed bool   `json:"passed"`
+	Weight int    `json:"weight"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // HostScore is the hardening posture of one open endpoint.
@@ -27,11 +27,11 @@ type HostScore struct {
 
 // ScanScore aggregates host hardening scores for one scan.
 type ScanScore struct {
-	ScanID      string      `json:"scan_id"`
-	Score       int         `json:"score"`
-	Grade       string      `json:"grade"`
-	HostsScored int         `json:"hosts_scored"`
-	Hosts       []HostScore `json:"hosts"`
+	ScanID      string       `json:"scan_id"`
+	Score       int          `json:"score"`
+	Grade       string       `json:"grade"`
+	HostsScored int          `json:"hosts_scored"`
+	Hosts       []HostScore  `json:"hosts"`
 	Summary     []RuleResult `json:"summary"`
 }
 
@@ -127,6 +127,13 @@ func ruleTLS(h model.Host) RuleResult {
 		r.Detail = "TLS version not observed"
 		return r
 	}
+	for _, v := range h.Service.SupportedTLSVersions {
+		if v == "TLS 1.0" || v == "TLS 1.1" || v == "SSL 3.0" {
+			r.Passed = false
+			r.Detail = "accepts obsolete " + v
+			return r
+		}
+	}
 	v := h.Service.TLSVersion
 	if v == "TLS 1.2" || v == "TLS 1.3" {
 		r.Passed = true
@@ -161,6 +168,9 @@ func ruleCrypto(h model.Host) RuleResult {
 	level := strings.ToLower(h.Service.EncryptionLevel)
 	suite := strings.ToUpper(h.Service.TLSCipherSuite)
 	weakSuite := strings.Contains(suite, "RC4") || strings.Contains(suite, "3DES") || strings.Contains(suite, "_NULL_")
+	if len(h.Service.WeakCiphers) > 0 {
+		weakSuite = true
+	}
 	if level == "none" || level == "low" || weakSuite {
 		r.Detail = "weak encryption posture"
 		return r

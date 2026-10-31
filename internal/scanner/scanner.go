@@ -19,6 +19,7 @@ import (
 	"rdpshot/internal/events"
 	"rdpshot/internal/kerberos"
 	"rdpshot/internal/model"
+	"rdpshot/internal/notify"
 	"rdpshot/internal/rdp"
 	"rdpshot/internal/screenshot"
 	"rdpshot/internal/store"
@@ -109,8 +110,11 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 		e.persistScan(*scan)
 	}
 	e.prioritizeEndpoints(scan, endpoints)
-	screensEnabled := scan.Options.Acknowledged && e.deps.Grabber != nil &&
-		(scan.Options.EnableScreens || scan.Options.AuthModeImpliesScreenshot())
+	// EnableScreens is the sole operator gate for every screenshot path
+	// (post-login session, pre-auth Winlogon, evidence). single/pth do not
+	// imply capture unless the checkbox/flag is also set.
+	screensWanted := scan.Options.Acknowledged && scan.Options.EnableScreens
+	screensEnabled := screensWanted && e.deps.Grabber != nil
 	if screensEnabled {
 		if err := e.deps.Grabber.Available(); err != nil {
 			logger.Warn("screenshot capture disabled", "reason", err.Error())
@@ -161,7 +165,7 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 					continue
 				}
 				atomic.AddInt64(&progress.ActiveJobs, 1)
-				e.processEndpoint(ctx, scan, ep, progress, candidates, screensEnabled, ocrSeeds)
+				e.processEndpoint(ctx, scan, ep, progress, candidates, screensWanted, screensEnabled, ocrSeeds)
 				atomic.AddInt64(&progress.ActiveJobs, -1)
 				atomic.AddInt64(&progress.Done, 1)
 			}
@@ -210,11 +214,36 @@ func (e *Engine) RunWithControl(ctx context.Context, scan *model.Scan, endpoints
 	final := snapshotProgress(progress)
 	logger.Info("scan finished", "status", scan.Status, "done", final.Done, "open", final.Open,
 		"findings", final.Findings, "credentials", final.Creds, "screenshots", final.Screens)
+
+	if url := strings.TrimSpace(scan.Options.WebhookURL); url != "" {
+		summary, _ := e.deps.Store.Summary(scan.ID)
+		crit := summary.CountBySeverity(model.SeverityCritical)
+		hi := summary.CountBySeverity(model.SeverityHigh)
+		p := notify.Payload{
+			Event:      "scan.finished",
+			At:         finished,
+			ScanID:     scan.ID,
+			ScanName:   scan.Name,
+			Status:     string(scan.Status),
+			Summary:    summary,
+			Critical:   crit,
+			High:       hi,
+			Engagement: scan.Engagement,
+			Detail:     fmt.Sprintf("Scan %q finished: %d hosts done, %d findings (Critical: %d, High: %d)", scan.Name, final.Done, final.Findings, crit, hi),
+		}
+		go func() {
+			nctx, ncancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer ncancel()
+			_ = notify.Webhook(nctx, url, p)
+		}()
+	}
 }
 
 // processEndpoint performs recon and the optional stages for a single endpoint.
+// screensWanted gates every capture path; screensEnabled additionally requires
+// a working post-login Grabber.
 func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model.Endpoint,
-	progress *model.Progress, candidates []model.Credential, screensEnabled bool, ocrSeeds *ocrUserSeed) {
+	progress *model.Progress, candidates []model.Credential, screensWanted, screensEnabled bool, ocrSeeds *ocrUserSeed) {
 
 	logger := e.deps.Logger.With("scan_id", scan.ID, "target", ep.Key())
 	host := model.Host{
@@ -255,6 +284,18 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 				svc.Evidence["udp_3389"] = disc.UDPEvidence
 			}
 		}
+		if scan.Options.EnableUDP {
+			udpRes := rdp.ProbeRDPEUDP(ctx, ep, time.Duration(scan.Options.TimeoutMS)*time.Millisecond)
+			if udpRes.Reachable {
+				svc.UDP3389 = true
+				svc.UDPRDPAcceleration = udpRes.SYNACK || udpRes.DTLSSupport
+				svc.UDPEvidence = udpRes.Evidence
+				if svc.Evidence == nil {
+					svc.Evidence = map[string]string{}
+				}
+				svc.Evidence["udp_3389"] = udpRes.Evidence
+			}
+		}
 		if svc.NLARequired {
 			kst := kerberos.Probe()
 			if kst.Available {
@@ -269,6 +310,48 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 				}
 			}
 		}
+		if scan.Options.EnableVuln && (svc.NegotiatedProtocol == rdp.ProtocolSSL || svc.NegotiatedProtocol == rdp.ProtocolHybrid || svc.NegotiatedProtocol == rdp.ProtocolHybridEx) {
+			if prof, err := rdp.ProbeTLSProfile(ctx, ep, time.Duration(scan.Options.TimeoutMS)*time.Millisecond); err == nil && prof != nil {
+				svc.SupportedTLSVersions = prof.SupportedVersions
+				svc.WeakCiphers = prof.WeakCiphers
+			}
+			if svc.NegotiatedProtocol == rdp.ProtocolHybrid || svc.NegotiatedProtocol == rdp.ProtocolHybridEx {
+				if down, err := rdp.ProbeNLADowngrade(ctx, ep, time.Duration(scan.Options.TimeoutMS)*time.Millisecond); err == nil && down.Vulnerable {
+					svc.NLADowngradeVulnerable = true
+					svc.NLADowngradeEvidence = down.Evidence
+				}
+			}
+		}
+		mfaPAM := rdp.DetectMFAPAM(&svc)
+		if mfaPAM.MFAEnforced {
+			svc.MFAEnforced = true
+			if svc.Evidence == nil {
+				svc.Evidence = map[string]string{}
+			}
+			svc.Evidence["mfa"] = mfaPAM.Evidence
+		}
+		if mfaPAM.PAMProxyDetected {
+			svc.PAMProxy = true
+			if svc.Evidence == nil {
+				svc.Evidence = map[string]string{}
+			}
+			svc.Evidence["pam"] = mfaPAM.Evidence
+		}
+		if mfaPAM.Provider != "" {
+			svc.SecurityGateway = string(mfaPAM.Provider)
+		}
+		honeypot := rdp.DetectHoneypot(&svc)
+		if honeypot.IsHoneypot {
+			svc.HoneypotDetected = true
+			svc.HoneypotReason = honeypot.Reason
+			if svc.Evidence == nil {
+				svc.Evidence = map[string]string{}
+			}
+			svc.Evidence["honeypot"] = honeypot.Evidence
+		}
+		shadow := rdp.EvaluateShadowPosture(&svc)
+		svc.ShadowPolicy = shadow.PolicyName
+		svc.ShadowUnprompted = shadow.Unprompted
 		host.Service = &svc
 		atomic.AddInt64(&progress.Open, 1)
 	case errors.Is(err, rdp.ErrTimeout):
@@ -308,18 +391,23 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 			finding.ID = id
 			atomic.AddInt64(&progress.Findings, 1)
 			e.publish(model.Event{Type: model.EventFinding, ScanID: scan.ID, At: finding.DetectedAt, Payload: finding})
+			e.maybeNotifyFinding(scan, finding)
 		}
 	}
 
 	nlaRequired := host.Service != nil && host.Service.NLARequired
 	if len(candidates) == 0 {
-		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger, ocrSeeds)
+		if screensWanted {
+			e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger, ocrSeeds)
+		}
 		return
 	}
 	if !nlaRequired {
 		// CredSSP password audits require HYBRID/NLA. Capture Winlogon tiles
-		// for OCR seeding, record the skip, and align with nla-not-required.
-		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger, ocrSeeds)
+		// for OCR seeding when screenshots are enabled.
+		if screensWanted {
+			e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger, ocrSeeds)
+		}
 		e.recordAuthSkipped(scan, ep, hostID, logger)
 		return
 	}
@@ -339,8 +427,9 @@ func (e *Engine) processEndpoint(ctx context.Context, scan *model.Scan, ep model
 		e.captureScreenshot(ctx, scan, ep, hostID, cred, progress, logger)
 		return
 	}
-	// Failed or skipped login: try a real pre-auth Winlogon frame only.
-	if !ok {
+	// Failed or skipped login: try a real pre-auth Winlogon frame only when
+	// the operator opted into screenshots.
+	if !ok && screensWanted {
 		e.captureOpenHostEvidence(ctx, scan, ep, hostID, host.Service, progress, logger, ocrSeeds)
 	}
 }
@@ -529,6 +618,7 @@ func (e *Engine) recordSmartCardFinding(scan *model.Scan, ep model.Endpoint, hos
 	finding.ID = id
 	atomic.AddInt64(&progress.Findings, 1)
 	e.publish(model.Event{Type: model.EventFinding, ScanID: scan.ID, At: finding.DetectedAt, Payload: finding})
+	e.maybeNotifyFinding(scan, finding)
 }
 
 // captureOpenHostEvidence stores a live TLS login-screen capture when Winlogon
@@ -647,6 +737,7 @@ func (e *Engine) recordLoginScreenUsers(ctx context.Context, scan *model.Scan, e
 	finding.ID = id
 	atomic.AddInt64(&progress.Findings, 1)
 	e.publish(model.Event{Type: model.EventFinding, ScanID: scan.ID, At: finding.DetectedAt, Payload: finding})
+	e.maybeNotifyFinding(scan, finding)
 }
 
 // captureScreenshot stores a session image for a verified credential.
@@ -690,6 +781,8 @@ func (e *Engine) loadCandidates(opts model.ScanOptions) ([]model.Credential, err
 		return brute.BuildSingleCandidate(opts.AuthUsername, opts.AuthDomain, opts.AuthPassword)
 	case model.AuthModePTH:
 		return brute.BuildPTHCandidate(opts.AuthUsername, opts.AuthDomain, opts.AuthNTHash)
+	case model.AuthModeKerberos:
+		return brute.BuildKerberosCandidate(opts.AuthUsername, opts.AuthDomain, opts.AuthCCache)
 	case model.AuthModeWordlist:
 		users, err := e.loadWordlist(opts.UserWordlist)
 		if err != nil {
@@ -701,7 +794,7 @@ func (e *Engine) loadCandidates(opts model.ScanOptions) ([]model.Credential, err
 		}
 		return brute.BuildCandidates(users, passwords, opts.AuthDomain)
 	default:
-		return nil, fmt.Errorf("scanner: unknown auth_mode %q (want wordlist|single|pth)", opts.AuthMode)
+		return nil, fmt.Errorf("scanner: unknown auth_mode %q (want wordlist|single|pth|kerberos)", opts.AuthMode)
 	}
 }
 
@@ -820,4 +913,33 @@ func (e *Engine) log(scanID, level, message string) {
 		At:      time.Now().UTC(),
 		Payload: model.LogPayload{Level: level, Message: message},
 	})
+}
+
+func (e *Engine) maybeNotifyFinding(scan *model.Scan, f model.Finding) {
+	url := strings.TrimSpace(scan.Options.WebhookURL)
+	if url == "" {
+		return
+	}
+	level := strings.ToLower(strings.TrimSpace(scan.Options.WebhookLevel))
+	if level == "" {
+		level = "critical"
+	}
+	shouldNotify := false
+	switch level {
+	case "all":
+		shouldNotify = true
+	case "high":
+		shouldNotify = (f.Severity == model.SeverityCritical || f.Severity == model.SeverityHigh)
+	case "critical":
+		shouldNotify = (f.Severity == model.SeverityCritical)
+	default:
+		shouldNotify = (f.Severity == model.SeverityCritical)
+	}
+	if shouldNotify {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = notify.NotifyFinding(ctx, url, scan.ID, scan.Name, f)
+		}()
+	}
 }

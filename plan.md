@@ -432,3 +432,71 @@ rdpshot/
 * Kimlik bilgisi dökümü (LSASS, ticket, hash) ve yan yanal hareket (lateral movement) yetenekleri.
 * Kalıcılık (persistence), C2, dosya sızdırma.
 * Yetkisiz erişim için araç kullanımı (dokümantasyonda açık uyarı ve onay mekanizması bulunur).
+
+---
+
+## 16. İleri Seviye Kurumsal Yetenekler Geliştirme Yol Haritası (v3)
+
+Bu bölüm, `rdpshot` platformunu kurumsal denetim ve sızma testi standartlarında yeni nesil yeteneklerle donatmak için belirlenen yol haritasıdır. Geliştirmeler tamamlandıkça adım adım işaretlenecektir.
+
+### Faz 1: Kurumsal Uyumluluk Standartları Eşlemesi (Compliance Mapping)
+- [x] **1.1** `internal/model/model.go`: `Finding` yapısına kurumsal uyumluluk referansları ekleme (`Compliance` struct: CIS, PCI-DSS, NIST, ISO 27001).
+- [x] **1.2** `internal/vuln/`: Zafiyet kataloğundaki tüm kontrollere ilgili standart maddelerini tanımlama (NLA eksikliği -> PCI-DSS 8.3 & CIS 2.3.1.5, BlueKeep -> NIST PR.IP-12 vb.).
+- [x] **1.3** `internal/reporter/`: HTML, PDF ve CSV raporlarına "Uyumluluk ve Denetim Matrisi (Compliance Matrix)" tablosunu ve filtrelerini entegre etme.
+- [x] **1.4** `internal/server/` & Web UI: REST API bulgu çıktısına standartları ekleme; Web UI üzerinde standart bazlı rozetler gösterme.
+
+### Faz 2: Zayıf SSL/TLS ve Cipher Suite Güvenlik Denetimi (Cryptographic Posture)
+- [x] **2.1** `internal/rdp/tls.go`: Sunucunun desteklediği TLS versiyonlarını (TLS 1.0, 1.1, 1.2, 1.3) ve kriptografik cipher suite'leri sorgulayan probe motoru.
+- [x] **2.2** `internal/vuln/`: Eski TLS sürümleri (`tls-legacy-1.0-1.1`) ve zayıf şifreleme algoritmaları (RC4, 3DES/Sweet32, CBC modlu şifreler) için zafiyet kontrolleri oluşturma.
+- [x] **2.3** `internal/score/`: Zayıf şifreleme ve eski TLS kullanımını hardening skoruna yansıtma.
+
+### Faz 3: Harici Tarama Çıktısı İçe Aktarma (Nmap / Masscan XML Import Engine)
+- [x] **3.1** `internal/target/import.go`: Nmap XML (`-oX`) ve Masscan çıktılarından açık 3389 ve RDP servis portlarını otomatik ayrıştıran import motoru.
+- [x] **3.2** `cmd/rdpshot/`: CLI `scan` ve `targets` komutlarına `--import-nmap` / `--import-file` bayraklarını ekleme.
+- [x] **3.3** `internal/server/`: Web UI ve REST API üzerinde dosya yükleme ile import desteği sağlama.
+
+### Faz 4: MFA / PAM ve Güvenli Erişim Katmanı Tespiti (MFA/PAM Heuristics)
+- [x] **4.1** `internal/rdp/mfa.go`: RDP el sıkışması, sertifika verileri, pre-auth mesajları ve OCR çıktıları üzerinden Duo Security, CyberArk PSM ve Entra ID (Azure AD) gibi MFA/PAM çözümlerini tespit eden heuristik motor.
+- [x] **4.2** `internal/vuln/`: Pozitif yetenek/güvenlik bulguları ekleme (`mfa-enforced`, `pam-proxy-detected`).
+
+### Faz 5: RDP UDP (MS-RDPEUDP / Port 3389 UDP) Keşif Denetimi
+- [x] **5.1** `internal/rdp/udp.go`: MS-RDPEUDP protokolü için UDP SYN / SYN-ACK bağlantı ve DTLS destek probu.
+- [x] **5.2** `internal/scanner/`: Tarayıcı motoruna UDP 3389 denetim desteği (`--enable-udp`).
+- [x] **5.3** Servis modeline ve raporlara RDP-UDP hızlandırma durumunun işlenmesi.
+
+### Faz 6: Gelişmiş Pass-the-Ticket (Kerberos / CCache) Desteği
+- [x] **6.1** `internal/credssp/kerberos.go`: Harici CCache bilet dosyasını doğrudan okuma ve Kerberos TGS bilet enjeksiyonu.
+- [x] **6.2** CLI ve API'ye `--auth-ccache` parametresi eklenerek parola ve hash olmadan Kerberos biletli oturum açma.
+
+### Faz 7: Karşılaştırmalı Yönetici Özeti (Delta Comparison Executive PDF)
+- [x] **7.1** `internal/reporter/compare_pdf.go`: İki tarama ID'si arasındaki iyileşmeleri (kapatılan zafiyetler, skor artışı, yeni hostlar) karşılaştıran Executive One-Pager PDF motoru.
+- [x] **7.2** CLI `report --compare` ve REST API `GET /api/v1/reports/compare-pdf` uç noktaları.
+
+### Faz 8: Web UI Tema Desteği (Dark / Light Theme Toggle)
+- [x] **8.1** `web/static/css/theme.css`: Command Center (Dark) ve Corporate Clean (Light) CSS değişkenleri ve stilleri.
+- [x] **8.2** `web/static/js/app.js`: LocalStorage tabanlı anlık tema geçişi butonu ve arayüz entegrasyonu.
+
+### Faz 9: RDP Honeypot & Deception Tespiti (Tuzak Sistem Analizi)
+- [x] **9.1** `internal/rdp/honeypot.go`: Sahte el sıkışma, anomali tespiti ve honeypot parmak izi heuristik motoru.
+- [x] **9.2** `internal/vuln/`: `rdp-honeypot-detected` ve `deception-host-flagged` denetim kontrolleri ekleme.
+- [x] **9.3** Servis modeline, API çıktısına ve Web UI üzerinde Honeypot uyarı rozetlerinin işlenmesi.
+
+### Faz 10: RDP Downgrade & MitM Saldırı Yüzeyi Denetimi (PyRDP/Seth Koruma Testi)
+- [x] **10.1** `internal/rdp/downgrade.go`: İstemci NLA sunmadığında sunucunun NLA zorunluluğundan vazgeçip vazgeçmediğini test eden probe motoru.
+- [x] **10.2** `internal/vuln/`: `rdp-nla-downgrade-vulnerable` zafiyet kontrolü ve PCI-DSS / CIS uyumluluk eşlemesi.
+
+### Faz 11: RDP Shadowing & Session Hijacking Posture Denetimi
+- [x] **11.1** `internal/rdp/shadow.go`: RDP Capability müzakeresinde sunucu Session Shadowing politikasını sorgulayan analiz modülü.
+- [x] **11.2** `internal/vuln/`: Kullanıcı onayı olmaksızın izleme/kontrol izni veren (`Shadow=1` veya `Shadow=3`) durumlar için `rdp-shadow-unprompted-exposed` bulgusu.
+
+### Faz 12: Kurumsal SOAR & Webhook Bildirim Motoru (Slack, Teams, Discord, Webhook)
+- [x] **12.1** `internal/notify/webhook.go`: Generic Webhook, Slack, MS Teams ve Discord uyumlu bildirim motoru.
+- [x] **12.2** Config, CLI ve Server: `--webhook-url` ve `--webhook-level` bayrakları; kritik bulgu ve tarama tamamlanma olaylarını yayınlama.
+
+### Faz 13: Active Directory / LDAP Hedef Keşif Motoru (Domain Auto-Discovery)
+- [x] **13.1** `internal/target/ldap.go`: Active Directory üzerinden `servicePrincipalName=TERMSRV/*` veya Windows sunucu bilgisayar hesaplarını sorgulayan keşif motoru.
+- [x] **13.2** CLI ve API'ye AD/LDAP hedef parametreleri (`--ad-server`, `--ad-domain`, `--ad-user`, `--ad-pass`) eklenmesi.
+
+### Faz 14: Saf Go RDPGFX (Remote Desktop Protocol: Graphics Pipeline Extension) Framebuffer
+- [x] **14.1** `internal/rdp/rdpgfx.go`: `[MS-RDPEGFX]` DVC kanalı, CapsAdvertise/CapsConfirm ve surface frame decode motoru.
+- [x] **14.2** `internal/screenshot/`: Harici Xvfb/FreeRDP bağımlılığı olmadan modern Windows 11 / Server 2022-2025 için saf-Go RDPGFX yakalama önceliği.

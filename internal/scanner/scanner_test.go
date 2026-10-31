@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"rdpshot/internal/brute"
 	"rdpshot/internal/events"
 	"rdpshot/internal/model"
+	"rdpshot/internal/notify"
 	"rdpshot/internal/rdp"
 	"rdpshot/internal/screenshot"
 	"rdpshot/internal/store"
@@ -801,6 +803,7 @@ func TestRunOpenHostSkipsSyntheticEvidenceWhenLoginUIUnavailable(t *testing.T) {
 	opts := baseOptions()
 	opts.EnableAuth = false
 	opts.EnableScreens = false
+	opts.Acknowledged = true
 	scan := env.newScan(t, "open-host-no-synthetic", opts)
 	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
 
@@ -809,7 +812,7 @@ func TestRunOpenHostSkipsSyntheticEvidenceWhenLoginUIUnavailable(t *testing.T) {
 		t.Fatalf("list screenshots: %v", err)
 	}
 	if len(shots) != 0 {
-		t.Fatalf("stored %d screenshots, want 0 (no synthetic detection card)", len(shots))
+		t.Fatalf("stored %d screenshots, want 0 (screens disabled)", len(shots))
 	}
 	if scan.Progress.Screens != 0 {
 		t.Errorf("progress.Screens = %d, want 0", scan.Progress.Screens)
@@ -818,15 +821,15 @@ func TestRunOpenHostSkipsSyntheticEvidenceWhenLoginUIUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list hosts: %v", err)
 	}
-	if len(hosts) != 1 || hosts[0].Service == nil || hosts[0].Service.Evidence == nil {
+	if len(hosts) != 1 || hosts[0].Service == nil {
 		t.Fatalf("hosts = %+v", hosts)
 	}
-	if hosts[0].Service.Evidence["login_screen"] != "skipped" {
-		t.Fatalf("login_screen evidence = %#v", hosts[0].Service.Evidence)
-	}
-	if reason := hosts[0].Service.Evidence["login_screen_skip_reason"]; reason == "" ||
-		!strings.Contains(strings.ToLower(reason), "nla") {
-		t.Fatalf("login_screen_skip_reason = %q, want NLA explanation", reason)
+	// Capture paths are skipped entirely when EnableScreens is false, so no
+	// login_screen skip evidence is recorded either.
+	if hosts[0].Service.Evidence != nil {
+		if _, ok := hosts[0].Service.Evidence["login_screen"]; ok {
+			t.Fatalf("login_screen evidence = %#v, want unset when screens disabled", hosts[0].Service.Evidence)
+		}
 	}
 }
 
@@ -869,6 +872,8 @@ func TestRunPrefersLoginScreenCapture(t *testing.T) {
 
 	opts := baseOptions()
 	opts.EnableAuth = false
+	opts.EnableScreens = true
+	opts.Acknowledged = true
 	scan := env.newScan(t, "login-screen", opts)
 	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
 
@@ -908,6 +913,8 @@ func TestRunLoginScreenFailureStoresNoScreenshot(t *testing.T) {
 
 	opts := baseOptions()
 	opts.EnableAuth = false
+	opts.EnableScreens = true
+	opts.Acknowledged = true
 	scan := env.newScan(t, "login-screen-no-fallback", opts)
 	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
 
@@ -917,5 +924,93 @@ func TestRunLoginScreenFailureStoresNoScreenshot(t *testing.T) {
 	}
 	if len(shots) != 0 {
 		t.Fatalf("shots = %+v, want none", shots)
+	}
+}
+
+// TestRunScreensDisabledSkipsLoginScreen ensures EnableScreens=false never
+// stores a pre-auth frame even when the login-screen grabber would succeed.
+func TestRunScreensDisabledSkipsLoginScreen(t *testing.T) {
+	const addr = "10.0.0.88"
+	dir := t.TempDir()
+	out := filepath.Join(dir, "login.png")
+	if err := os.WriteFile(out, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := newTestEnv(t, nil, nil)
+	env.engine.deps.LoginScreen = stubLoginScreen{
+		shot: model.Screenshot{
+			Address: addr, Port: 3389, Username: screenshot.LoginScreenLabel,
+			FilePath: out, Width: 1024, Height: 768, CapturedAt: time.Now().UTC(),
+		},
+	}
+	env.gather.script(addr, rdp.GatherResult{
+		Service: model.ServiceInfo{NegotiatedProtocol: rdp.ProtocolSSL, NLARequired: false},
+	}, nil)
+
+	opts := baseOptions()
+	opts.EnableAuth = false
+	opts.EnableScreens = false
+	opts.Acknowledged = true
+	scan := env.newScan(t, "screens-disabled", opts)
+	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
+
+	shots, err := env.store.ListScreenshots(scan.ID)
+	if err != nil {
+		t.Fatalf("list screenshots: %v", err)
+	}
+	if len(shots) != 0 {
+		t.Fatalf("stored %d screenshots, want 0 when EnableScreens is false", len(shots))
+	}
+}
+
+func TestScanWebhookNotifications(t *testing.T) {
+	var mu sync.Mutex
+	var eventsReceived []string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload notify.Payload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+			mu.Lock()
+			eventsReceived = append(eventsReceived, payload.Event)
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	const addr = "10.0.0.99"
+	env := newTestEnv(t, nil, nil)
+	env.gather.script(addr, rdp.GatherResult{
+		Service: model.ServiceInfo{NegotiatedProtocol: rdp.ProtocolHybrid, NLARequired: true},
+	}, nil)
+
+	opts := baseOptions()
+	opts.WebhookURL = ts.URL
+	opts.WebhookLevel = "all"
+	opts.EnableVuln = true
+	scan := env.newScan(t, "webhook-test", opts)
+
+	runWithWatchdog(t, env, context.Background(), scan, []model.Endpoint{{Address: addr, Port: 3389}})
+
+	// Wait up to 1 second for asynchronous webhook delivery goroutines
+	deadline := time.Now().Add(1 * time.Second)
+	foundFinished := false
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		for _, ev := range eventsReceived {
+			if ev == "scan.finished" {
+				foundFinished = true
+				break
+			}
+		}
+		mu.Unlock()
+		if foundFinished {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if !foundFinished {
+		t.Errorf("expected scan.finished webhook event, received: %v", eventsReceived)
 	}
 }

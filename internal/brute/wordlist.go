@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"rdpshot/internal/credssp"
 	"rdpshot/internal/model"
 	"rdpshot/internal/ntlm"
 )
@@ -182,5 +183,35 @@ func BuildPTHCandidate(username, domain, nthash string) ([]model.Credential, err
 		Domain:   dom,
 		Secret:   ntlm.FormatNTHash(raw),
 		Method:   model.CredMethodNTHash,
+	}}, nil
+}
+
+// BuildKerberosCandidate builds one Kerberos pass-the-ticket credential from a CCache file.
+func BuildKerberosCandidate(username, domain, ccachePath string) ([]model.Credential, error) {
+	ccachePath = strings.TrimSpace(ccachePath)
+	if ccachePath == "" {
+		return nil, fmt.Errorf("brute: ccache file path is required for kerberos mode")
+	}
+	cc, err := credssp.LoadCCacheFile(ccachePath)
+	if err != nil {
+		return nil, fmt.Errorf("brute: %w", err)
+	}
+	user := strings.TrimSpace(username)
+	if user == "" && len(cc.DefaultPrincipal.Components) > 0 {
+		user = cc.DefaultPrincipal.Components[0]
+	}
+	if user == "" {
+		return nil, fmt.Errorf("brute: username not provided and could not be determined from ccache")
+	}
+	dom := strings.TrimSpace(domain)
+	if dom == "" {
+		dom = cc.DefaultPrincipal.Realm
+	}
+	user, dom = ParseUserDomain(user, dom)
+	return []model.Credential{{
+		Username: user,
+		Domain:   dom,
+		Secret:   ccachePath,
+		Method:   model.CredMethodKerberos,
 	}}, nil
 }

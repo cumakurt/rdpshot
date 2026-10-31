@@ -147,7 +147,7 @@ func TestCSV(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	const wantHeader = "scan_id,address,port,check_id,title,severity,status,cve,cvss,detected_at,evidence,remediation"
+	const wantHeader = "scan_id,address,port,check_id,title,severity,status,cve,cvss,detected_at,compliance,evidence,remediation"
 	if lines[0] != wantHeader {
 		t.Fatalf("header mismatch:\ngot  %q\nwant %q", lines[0], wantHeader)
 	}
@@ -275,7 +275,7 @@ func TestEmptyData(t *testing.T) {
 	if err := CSV(&csvBuf, d); err != nil {
 		t.Fatalf("CSV() with empty data: %v", err)
 	}
-	if got := strings.Split(csvBuf.String(), "\n")[0]; got != "scan_id,address,port,check_id,title,severity,status,cve,cvss,detected_at,evidence,remediation" {
+	if got := strings.Split(csvBuf.String(), "\n")[0]; got != "scan_id,address,port,check_id,title,severity,status,cve,cvss,detected_at,compliance,evidence,remediation" {
 		t.Errorf("unexpected csv header %q", got)
 	}
 
@@ -293,5 +293,65 @@ func TestEmptyData(t *testing.T) {
 	}
 	if !bytes.HasPrefix(pdfBuf.Bytes(), []byte("%PDF")) {
 		t.Error("empty pdf output does not start with %PDF")
+	}
+}
+
+func TestComparePDF(t *testing.T) {
+	diff := model.ScanDiff{
+		BaseID:      "scan-001",
+		AgainstID:   "scan-002",
+		BaseName:    "Q1 Baseline",
+		AgainstName: "Q2 Remediation",
+		HostsAdded: []model.Host{
+			{Endpoint: model.Endpoint{Address: "192.168.1.50", Port: 3389}, State: "open"},
+		},
+		HostsRemoved: []model.Host{
+			{Endpoint: model.Endpoint{Address: "192.168.1.99", Port: 3389}, State: "closed"},
+		},
+		HostsChanged: []model.HostChange{
+			{
+				Address: "192.168.1.10",
+				Port:    3389,
+				Before:  model.HostSnap{NLARequired: false, TLSVersion: "TLS 1.0"},
+				After:   model.HostSnap{NLARequired: true, TLSVersion: "TLS 1.2"},
+			},
+		},
+		FindingsAdded: []model.Finding{
+			{
+				Address:  "192.168.1.50",
+				Port:     3389,
+				CheckID:  "rdp-service-exposed",
+				Title:    "RDP Service Exposed",
+				Severity: model.SeverityInfo,
+				Status:   model.FindingVulnerable,
+			},
+		},
+		FindingsRemoved: []model.Finding{
+			{
+				Address:  "192.168.1.10",
+				Port:     3389,
+				CheckID:  "nla-not-required",
+				Title:    "NLA Not Enforced",
+				Severity: model.SeverityHigh,
+				Status:   model.FindingVulnerable,
+			},
+		},
+		Summary: model.ScanDiffSummary{
+			HostsAdded:          1,
+			HostsRemoved:        1,
+			HostsChanged:        1,
+			FindingsAdded:       1,
+			FindingsRemoved:     1,
+			FindingsRemediated:  1,
+			HardeningScoreDelta: 15,
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := ComparePDF(&buf, diff, "2.0.0"); err != nil {
+		t.Fatalf("ComparePDF failed: %v", err)
+	}
+	if !bytes.HasPrefix(buf.Bytes(), []byte("%PDF")) {
+		t.Errorf("ComparePDF output missing %%PDF header: got %d bytes", buf.Len())
 	}
 }

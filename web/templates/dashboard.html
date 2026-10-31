@@ -100,8 +100,8 @@
                 <div class="targets-file-box">
                   <label for="scan-targets-file" class="label">Or load from file</label>
                   <input id="scan-targets-file" name="targets_file" type="file"
-                    accept=".txt,.lst,.list,text/plain" class="input" data-targets-file>
-                  <p class="wordlist-hint">One target per line (IP, CIDR, hostname, host:port). Lines starting with # are ignored.</p>
+                    accept=".txt,.lst,.list,.xml,.json,text/plain,application/xml,application/json" class="input" data-targets-file>
+                  <p class="wordlist-hint">Text target list (IP/CIDR per line) or Nmap XML (-oX) / Masscan output.</p>
                   <p class="targets-file-status hidden" data-targets-file-status role="status"></p>
                 </div>
               </div>

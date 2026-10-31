@@ -3,6 +3,7 @@ package rdp
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"testing"
 )
 
@@ -144,5 +145,22 @@ func TestReadConnectionConfirmEndToEnd(t *testing.T) {
 	}
 	if res.SelectedProtocol != ProtocolHybridEx {
 		t.Fatalf("selected = %#x, want HYBRID_EX", res.SelectedProtocol)
+	}
+}
+
+func TestReadEarlyUserAuthorizationResult(t *testing.T) {
+	t.Parallel()
+	if err := ReadEarlyUserAuthorizationResult(bytes.NewReader([]byte{0, 0, 0, 0})); err != nil {
+		t.Fatalf("success: %v", err)
+	}
+	err := ReadEarlyUserAuthorizationResult(bytes.NewReader([]byte{5, 0, 0, 0}))
+	if !errors.Is(err, ErrEarlyUserAccessDenied) {
+		t.Fatalf("denied: %v", err)
+	}
+	if err := ReadEarlyUserAuthorizationResult(bytes.NewReader([]byte{1, 0, 0, 0})); err == nil {
+		t.Fatal("expected unexpected-code error")
+	}
+	if err := ReadEarlyUserAuthorizationResult(bytes.NewReader([]byte{0, 0})); err == nil {
+		t.Fatal("expected short-read error")
 	}
 }

@@ -9,9 +9,9 @@ import (
 
 // Credential types for TSCredentials.credType (MS-CSSP 2.2.1.2).
 const (
-	CredTypePassword      = 1
-	CredTypeSmartCard     = 2
-	CredTypeRemoteGuard   = 6
+	CredTypePassword    = 1
+	CredTypeSmartCard   = 2
+	CredTypeRemoteGuard = 6
 )
 
 // TSPasswordCreds is the password credential structure (MS-CSSP 2.2.1.2.1).

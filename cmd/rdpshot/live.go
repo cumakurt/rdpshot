@@ -53,6 +53,10 @@ func printEventsPlain(sub *events.Subscription, w io.Writer) {
 			if !ok {
 				continue
 			}
+			if f.Status != "" && f.Status != model.FindingVulnerable {
+				fmt.Fprintf(w, "finding  %-8s  %-16s  %s  %s:%d  %s\n", f.Severity, f.Status, f.CheckID, f.Address, f.Port, f.Title)
+				continue
+			}
 			fmt.Fprintf(w, "finding  %-8s  %s  %s:%d  %s\n", f.Severity, f.CheckID, f.Address, f.Port, f.Title)
 		case model.EventCredential:
 			c, ok := ev.Payload.(model.Credential)
@@ -79,15 +83,15 @@ func printEventsPlain(sub *events.Subscription, w io.Writer) {
 }
 
 type livePanel struct {
-	w          io.Writer
-	lines      int
-	drawn      bool
-	status     string
-	progress   model.Progress
-	hasProg    bool
-	lastEvent  string
-	lastColor  string
-	startedAt  time.Time
+	w         io.Writer
+	lines     int
+	drawn     bool
+	status    string
+	progress  model.Progress
+	hasProg   bool
+	lastEvent string
+	lastColor string
+	startedAt time.Time
 }
 
 func printEventsTTY(sub *events.Subscription, w io.Writer) {
@@ -176,18 +180,18 @@ func printEventsTTY(sub *events.Subscription, w io.Writer) {
 }
 
 const (
-	ansiReset  = "\033[0m"
-	ansiBold   = "\033[1m"
-	ansiDim    = "\033[2m"
-	ansiGreen  = "\033[32m"
-	ansiRed    = "\033[31m"
-	ansiAmber  = "\033[33m"
-	ansiBlue   = "\033[34m"
-	ansiCyan   = "\033[36m"
+	ansiReset   = "\033[0m"
+	ansiBold    = "\033[1m"
+	ansiDim     = "\033[2m"
+	ansiGreen   = "\033[32m"
+	ansiRed     = "\033[31m"
+	ansiAmber   = "\033[33m"
+	ansiBlue    = "\033[34m"
+	ansiCyan    = "\033[36m"
 	ansiMagenta = "\033[35m"
-	ansiMuted  = "\033[90m"
-	ansiClear  = "\033[2K"
-	ansiUp     = "\033[%dA"
+	ansiMuted   = "\033[90m"
+	ansiClear   = "\033[2K"
+	ansiUp      = "\033[%dA"
 )
 
 func (p *livePanel) redraw() {

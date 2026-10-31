@@ -15,9 +15,9 @@ import (
 
 // Result captures alternate exposure signals for one address.
 type Result struct {
-	RDWeb        bool   `json:"rd_web,omitempty"`
-	RDWebURL     string `json:"rd_web_url,omitempty"`
-	RDWebEvidence string `json:"rd_web_evidence,omitempty"`
+	RDWeb             bool   `json:"rd_web,omitempty"`
+	RDWebURL          string `json:"rd_web_url,omitempty"`
+	RDWebEvidence     string `json:"rd_web_evidence,omitempty"`
 	RDGateway         bool   `json:"rd_gateway,omitempty"`
 	RDGatewayEvidence string `json:"rd_gateway_evidence,omitempty"`
 	RDGatewayAuth     string `json:"rd_gateway_auth,omitempty"`

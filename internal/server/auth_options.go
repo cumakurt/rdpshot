@@ -13,12 +13,16 @@ import (
 // require the matching secret fields.
 func applyAuthOptions(opts *model.ScanOptions, get func(string) string) error {
 	mode := strings.ToLower(strings.TrimSpace(get("auth_mode")))
+	ccache := strings.TrimSpace(get("auth_ccache"))
+	if mode == "" && ccache != "" {
+		mode = model.AuthModeKerberos
+	}
 	switch mode {
 	case "":
 		mode = model.AuthModeWordlist
-	case model.AuthModeWordlist, model.AuthModeSingle, model.AuthModePTH:
+	case model.AuthModeWordlist, model.AuthModeSingle, model.AuthModePTH, model.AuthModeKerberos:
 	default:
-		return errors.New("auth_mode must be wordlist, single, or pth")
+		return errors.New("auth_mode must be wordlist, single, pth, or kerberos")
 	}
 
 	opts.AuthMode = mode
@@ -26,11 +30,11 @@ func applyAuthOptions(opts *model.ScanOptions, get func(string) string) error {
 	opts.AuthDomain = strings.TrimSpace(get("auth_domain"))
 	opts.AuthPassword = strings.TrimSpace(get("auth_password"))
 	opts.AuthNTHash = strings.TrimSpace(get("auth_nthash"))
+	opts.AuthCCache = ccache
 
-	if mode == model.AuthModeSingle || mode == model.AuthModePTH {
+	if mode == model.AuthModeSingle || mode == model.AuthModePTH || mode == model.AuthModeKerberos {
 		opts.EnableAuth = true
-		// Single/PTH verify → screenshot → immediate disconnect.
-		opts.EnableScreens = true
+		// Screenshots stay under EnableScreens; single/pth/kerberos do not force them.
 	}
 	if !opts.EnableAuth {
 		return nil
@@ -45,6 +49,7 @@ func applyAuthOptions(opts *model.ScanOptions, get func(string) string) error {
 			return errors.New("auth_password is required for single-credential mode")
 		}
 		opts.AuthNTHash = ""
+		opts.AuthCCache = ""
 	case model.AuthModePTH:
 		if opts.AuthUsername == "" {
 			return errors.New("auth_username is required for pass-the-hash mode")
@@ -58,6 +63,13 @@ func applyAuthOptions(opts *model.ScanOptions, get func(string) string) error {
 		}
 		opts.AuthNTHash = ntlm.FormatNTHash(raw)
 		opts.AuthPassword = ""
+		opts.AuthCCache = ""
+	case model.AuthModeKerberos:
+		if opts.AuthCCache == "" {
+			return errors.New("auth_ccache is required for kerberos pass-the-ticket mode")
+		}
+		opts.AuthPassword = ""
+		opts.AuthNTHash = ""
 	}
 	return nil
 }

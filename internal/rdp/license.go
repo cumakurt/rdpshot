@@ -4,20 +4,20 @@ import "encoding/binary"
 
 // License message types (MS-RDPBCGR 2.2.1.12).
 const (
-	licenseRequest            byte = 0x01
-	licensePlatformChallenge  byte = 0x02
-	licenseNewLicense         byte = 0x03
-	licenseUpgradeLicense     byte = 0x04
-	licenseInfo               byte = 0x12
-	licenseNewLicenseRequest  byte = 0x13
-	licenseChallengeResp      byte = 0x15
-	licenseErrorAlert         byte = 0xFF
+	licenseRequest           byte = 0x01
+	licensePlatformChallenge byte = 0x02
+	licenseNewLicense        byte = 0x03
+	licenseUpgradeLicense    byte = 0x04
+	licenseInfo              byte = 0x12
+	licenseNewLicenseRequest byte = 0x13
+	licenseChallengeResp     byte = 0x15
+	licenseErrorAlert        byte = 0xFF
 )
 
 const (
-	licenseErrValidClient     uint32 = 0x00000007
-	licenseStateNoTransition  uint32 = 0x00000002
-	licensePreambleVersion30  byte   = 0x03
+	licenseErrValidClient    uint32 = 0x00000007
+	licenseStateNoTransition uint32 = 0x00000002
+	licensePreambleVersion30 byte   = 0x03
 )
 
 // buildLicenseErrorValidClient builds a LICENSE_ERROR_MESSAGE claiming the

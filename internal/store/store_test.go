@@ -342,9 +342,9 @@ func TestAnalyticsDeduplicatesHosts(t *testing.T) {
 			t.Fatalf("create scan: %v", err)
 		}
 		if _, err := s.UpsertHost(model.Host{
-			ScanID: id,
+			ScanID:   id,
 			Endpoint: model.Endpoint{Address: "10.0.0.8", Port: 3389},
-			State: "open",
+			State:    "open",
 			Service: &model.ServiceInfo{
 				NLARequired: false,
 				TLSVersion:  "TLS 1.0",
@@ -461,7 +461,7 @@ func TestScheduleLifecycle(t *testing.T) {
 	next := now.Add(time.Hour)
 	sch := model.Schedule{
 		ID: "sched-1", Name: "nightly", Enabled: true, IntervalSeconds: 3600,
-		Options: model.ScanOptions{Targets: []string{"10.0.0.0/24"}, Ports: []uint16{3389}},
+		Options:   model.ScanOptions{Targets: []string{"10.0.0.0/24"}, Ports: []uint16{3389}},
 		CreatedAt: now, UpdatedAt: now, NextRunAt: &next,
 	}
 	if err := s.CreateSchedule(sch); err != nil {

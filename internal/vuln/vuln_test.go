@@ -110,6 +110,7 @@ func TestEvaluateHardenedEndpointOmitsSpeculativeBlueKeep(t *testing.T) {
 	// NLA blocks the pre-auth probe — do not invent Critical/potential noise.
 	findingMissing(t, findings, "bluekeep-cve-2019-0708")
 	findingMissing(t, findings, "dejablue-cve-2019-1181-1182")
+	findingMissing(t, findings, "nla-not-required")
 }
 
 func TestBlueKeepNotVulnerableIsReported(t *testing.T) {

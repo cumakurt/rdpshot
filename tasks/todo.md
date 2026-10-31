@@ -44,13 +44,37 @@ Out of scope: exploit/payload, LSASS/hash dump, lateral movement, C2, exfil.
 - [x] Open RDP host → TLS pre-auth login-screen capture (FreeRDP /sec:tls) + OCR login_users; evidence card fallback; live desktop after verified login
 - [x] Vuln catalog confirmation-first (BlueKeep only on confirmed MS_T120 DPUM; drop speculative DejaBlue/potential Critical)
 
+## Enterprise Pack (v3: Faz 1 - 14)
+
+- [x] Faz 1: Kurumsal Uyumluluk Standartları (CIS, PCI-DSS, NIST, ISO 27001)
+- [x] Faz 2: Zayıf SSL/TLS ve Cipher Suite Güvenlik Denetimi
+- [x] Faz 3: Harici Tarama Çıktısı İçe Aktarma (Nmap / Masscan)
+- [x] Faz 4: MFA / PAM ve Güvenli Erişim Katmanı Tespiti
+- [x] Faz 5: RDP UDP (MS-RDPEUDP / Port 3389 UDP) Keşif Denetimi
+- [x] Faz 6: Gelişmiş Pass-the-Ticket (Kerberos / CCache) Desteği
+- [x] Faz 7: Karşılaştırmalı Yönetici Özeti (Delta Comparison Executive PDF)
+- [x] Faz 8: Web UI Tema Desteği (Dark / Light Theme Toggle)
+- [x] Faz 9: RDP Honeypot & Deception Tespiti (Tuzak Sistem Analizi)
+- [x] Faz 10: RDP Downgrade & MitM Saldırı Yüzeyi Denetimi
+- [x] Faz 11: RDP Shadowing & Session Hijacking Posture Denetimi
+- [x] Faz 12: Kurumsal SOAR & Webhook Bildirim Motoru (Slack, Teams, Discord, Webhook)
+- [x] Faz 13: Active Directory / LDAP Hedef Keşif Motoru (Domain Auto-Discovery)
+- [x] Faz 14: Saf Go RDPGFX (MS-RDPEGFX) Framebuffer
+
 ## Review
 
 - CredSSP `HandshakeSession` sends TSCredentials; verify-only `Handshake` unchanged.
 - `rdp.Capture` runs MCS → Client Info → License → Confirm Active → bitmap/orders (slow + fast path).
-- AutoGrabber: FreeRDP → Go framebuffer → evidence card.
+- AutoGrabber: FreeRDP (password `/from-stdin`, PTH `/pth`) → Go framebuffer → evidence card only if tooling missing.
 - Kerberos without a usable ccache stays NTLM; smart-card is discovery-only (no PIN UI).
 - Default `--max-concurrent-scans=2`; excess scans remain `pending` until a slot frees.
+
+## Lab matrix 172.16.3.128 (2026-10-31)
+
+- PASS: discovery, vuln (no false nla-not-required), auth±screens gate, single/wrong/domain/wordlist, reports html/csv/pdf, policy fail-by-design, API toggles.
+- PASS: password+screens (~85KB real desktop).
+- PASS: PTH auth without screens.
+- LIMIT: PTH+screens — FreeRDP `/pth` connects (restricted admin) but desktop stays black on this host; blank rejected (no fake evidence card). Go MCS Capture still RST after CredSSP on this HYBRID host.
 
 ## Gallery fix (2026-10-30)
 

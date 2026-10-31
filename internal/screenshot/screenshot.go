@@ -109,8 +109,18 @@ func (g *XFreeRDPGrabber) Grab(ctx context.Context, ep model.Endpoint, cred mode
 		"RDSHOT_OUT="+outPath,
 		fmt.Sprintf("RDSHOT_WAIT=%d", waitSeconds),
 	)
-	// FreeRDP /from-stdin expects a trailing newline after the password.
-	output, err := g.run(ctx, "xvfb-run", args, env, cred.Secret+"\n")
+	stdin := ""
+	if cred.Method == model.CredMethodKerberos {
+		env = append(env, "RDSHOT_CCACHE="+strings.TrimSpace(cred.Secret))
+	} else if cred.IsNTHash() {
+		// FreeRDP /pth (restricted admin). Hash is passed via env into the
+		// shell script so it does not appear on the Go process argv.
+		env = append(env, "RDSHOT_NTHASH="+strings.TrimSpace(cred.Secret))
+	} else {
+		// FreeRDP /from-stdin expects a trailing newline after the password.
+		stdin = cred.Secret + "\n"
+	}
+	output, err := g.run(ctx, "xvfb-run", args, env, stdin)
 	if err != nil {
 		detail := strings.TrimSpace(string(output))
 		if len(detail) > 300 {
@@ -165,12 +175,23 @@ domain="$RDSHOT_DOMAIN"
 if [ -z "$domain" ]; then
   domain=.
 fi
-# Read the password before backgrounding: a bare "&" does not reliably keep
-# the parent pipe attached to xfreerdp's /from-stdin. $(cat) strips a trailing
-# newline, so always re-terminate when feeding FreeRDP.
-pass=$(cat)
-printf '%s\n' "$pass" | xfreerdp /v:"$RDSHOT_HOST:$RDSHOT_PORT" /u:"$RDSHOT_USER" /d:"$domain" \
-  /cert:ignore /sec:nla /size:1024x768 /bpp:24 /from-stdin >"$log" 2>&1 &
+if [ -n "${RDSHOT_CCACHE:-}" ]; then
+  # Pass-the-ticket via Kerberos CCache file
+  export KRB5CCNAME="$RDSHOT_CCACHE"
+  xfreerdp /v:"$RDSHOT_HOST:$RDSHOT_PORT" /u:"$RDSHOT_USER" /d:"$domain" \
+    /cert:ignore /sec:nla /size:1024x768 /bpp:24 >"$log" 2>&1 &
+elif [ -n "${RDSHOT_NTHASH:-}" ]; then
+  # Pass-the-hash via FreeRDP restricted-admin mode (/pth).
+  xfreerdp /v:"$RDSHOT_HOST:$RDSHOT_PORT" /u:"$RDSHOT_USER" /d:"$domain" \
+    /pth:"$RDSHOT_NTHASH" /cert:ignore /sec:nla /size:1024x768 /bpp:24 >"$log" 2>&1 &
+else
+  # Read the password before backgrounding: a bare "&" does not reliably keep
+  # the parent pipe attached to xfreerdp's /from-stdin. $(cat) strips a trailing
+  # newline, so always re-terminate when feeding FreeRDP.
+  pass=$(cat)
+  printf '%s\n' "$pass" | xfreerdp /v:"$RDSHOT_HOST:$RDSHOT_PORT" /u:"$RDSHOT_USER" /d:"$domain" \
+    /cert:ignore /sec:nla /size:1024x768 /bpp:24 /from-stdin >"$log" 2>&1 &
+fi
 pid=$!
 trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; rm -f "$log"' EXIT
 have_window=0

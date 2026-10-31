@@ -23,13 +23,13 @@ type FileEntry struct {
 
 // Manifest is the signed-delivery checklist for an engagement pack.
 type Manifest struct {
-	Version    string      `json:"version"`
-	Generated  time.Time   `json:"generated_at"`
-	Engagement string      `json:"engagement,omitempty"`
-	ScanID     string      `json:"scan_id"`
-	ScanName   string      `json:"scan_name"`
-	Files      []FileEntry `json:"files"`
-	ManifestSHA256 string  `json:"manifest_sha256"`
+	Version        string      `json:"version"`
+	Generated      time.Time   `json:"generated_at"`
+	Engagement     string      `json:"engagement,omitempty"`
+	ScanID         string      `json:"scan_id"`
+	ScanName       string      `json:"scan_name"`
+	Files          []FileEntry `json:"files"`
+	ManifestSHA256 string      `json:"manifest_sha256"`
 }
 
 // BuildManifest hashes named file contents and returns a self-describing manifest.

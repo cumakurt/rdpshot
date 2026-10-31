@@ -67,6 +67,12 @@ type Client struct {
 	NTLMFlags uint32
 	// Domain is the fallback account domain when the call passes an empty one.
 	Domain string
+	// ExpectEarlyUserAuth tells the client that the peer selected
+	// PROTOCOL_HYBRID_EX: after TSCredentials the next TLS bytes are the
+	// Early User Authorization Result PDU (MS-RDPBCGR 2.2.15.2), not another
+	// TSRequest. The speculative post-AuthInfo NTSTATUS probe must be skipped
+	// so those four bytes remain for the RDP layer to consume.
+	ExpectEarlyUserAuth bool
 }
 
 // Session is a CredSSP-authenticated TLS connection with the NTLM session
@@ -77,11 +83,12 @@ type Session struct {
 	Version  int
 }
 
-// AuthSecret is either a cleartext password or a precomputed NT hash used for
-// NTLMv2 (pass-the-hash). Exactly one of Password or NTHash should be set.
+// AuthSecret is either a cleartext password, a precomputed NT hash used for
+// NTLMv2 (pass-the-hash), or a path to a Kerberos CCache file (pass-the-ticket).
 type AuthSecret struct {
-	Password string
-	NTHash   []byte
+	Password   string
+	NTHash     []byte
+	CCachePath string
 }
 
 // Handshake runs the CredSSP client exchange without credential delegation.
@@ -126,6 +133,44 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, domain stri
 	flags := c.ntlmFlags()
 	if domain == "" {
 		domain = c.Domain
+	}
+
+	if secret.CCachePath != "" {
+		cc, err := LoadCCacheFile(secret.CCachePath)
+		if err != nil {
+			return nil, fmt.Errorf("credssp: load ccache: %w", err)
+		}
+		targetHost := domain
+		if targetHost == "" {
+			targetHost = c.Domain
+		}
+		entry, err := cc.FindTicket(targetHost)
+		if err != nil {
+			return nil, fmt.Errorf("credssp: find ticket in ccache: %w", err)
+		}
+		kerbToken, err := BuildKerberosAPReqWrap(entry.Ticket)
+		if err != nil {
+			return nil, fmt.Errorf("credssp: build kerberos AP-REQ: %w", err)
+		}
+		first := TSRequest{Version: version, NegoTokens: [][]byte{kerbToken}}
+		if version >= 5 {
+			clientNonce := make([]byte, 32)
+			if _, err := rand.Read(clientNonce); err != nil {
+				return nil, fmt.Errorf("credssp: generate binding nonce: %w", err)
+			}
+			first.ClientNonce = clientNonce
+		}
+		if err := writeTSRequest(tlsConn, first); err != nil {
+			return nil, err
+		}
+		resp, err := readTSRequest(ctx, tlsConn)
+		if err != nil {
+			return nil, fmt.Errorf("credssp kerberos TSRequest: %w", err)
+		}
+		if resp.ErrorCode != nil {
+			return nil, &NTStatusError{Code: *resp.ErrorCode}
+		}
+		return &Session{Conn: tlsConn, Version: version}, nil
 	}
 
 	negotiate, err := ntlm.NegotiateMessage{Flags: flags}.Marshal()
@@ -276,11 +321,15 @@ func (c *Client) handshake(ctx context.Context, conn net.Conn, user, domain stri
 	if err := writeTSRequest(tlsConn, TSRequest{Version: version, AuthInfo: sealed}); err != nil {
 		return nil, err
 	}
-	_ = tlsConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	if follow, err := readTSRequest(ctx, tlsConn); err == nil && follow.ErrorCode != nil {
-		return nil, &NTStatusError{Code: *follow.ErrorCode}
+	// HYBRID_EX: leave the Early User Authorization Result for the RDP layer.
+	// Otherwise briefly probe for an optional NTSTATUS-bearing TSRequest.
+	if !c.ExpectEarlyUserAuth {
+		_ = tlsConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		if follow, err := readTSRequest(ctx, tlsConn); err == nil && follow.ErrorCode != nil {
+			return nil, &NTStatusError{Code: *follow.ErrorCode}
+		}
+		_ = tlsConn.SetReadDeadline(time.Time{})
 	}
-	_ = tlsConn.SetReadDeadline(time.Time{})
 
 	return &Session{Conn: tlsConn, Security: security, Version: negotiated}, nil
 }

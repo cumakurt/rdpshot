@@ -15,7 +15,7 @@ import (
 func csvHeader() []string {
 	return []string{
 		"scan_id", "address", "port", "check_id", "title", "severity",
-		"status", "cve", "cvss", "detected_at", "evidence", "remediation",
+		"status", "cve", "cvss", "detected_at", "compliance", "evidence", "remediation",
 	}
 }
 
@@ -40,6 +40,10 @@ func CSV(w io.Writer, d Data) error {
 			// the report's scan so the column is never empty.
 			scanID = d.Scan.ID
 		}
+		var compParts []string
+		for _, c := range f.Compliance {
+			compParts = append(compParts, c.Standard+":"+c.Section)
+		}
 		record := []string{
 			scanID,
 			f.Address,
@@ -51,6 +55,7 @@ func CSV(w io.Writer, d Data) error {
 			f.CVE,
 			formatCVSS(f.CVSS),
 			formatTime(f.DetectedAt),
+			strings.Join(compParts, "; "),
 			singleLine(f.Evidence),
 			singleLine(f.Remediation),
 		}
@@ -78,6 +83,7 @@ func CSV(w io.Writer, d Data) error {
 			"",
 			"",
 			formatTime(sc.CapturedAt),
+			"",
 			singleLine(strings.TrimSpace(sc.FilePath)),
 			encoded,
 		}

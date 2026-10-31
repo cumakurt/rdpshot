@@ -58,11 +58,11 @@ func TestEvaluateNLARegression(t *testing.T) {
 	rules := model.AlertRules{Enabled: true, WebhookURL: "https://hooks.example/x", OnNLARegressed: true}
 	prior := []model.Host{{
 		Endpoint: model.Endpoint{Address: "10.0.0.1", Port: 3389},
-		State: "open", Service: &model.ServiceInfo{NLARequired: true},
+		State:    "open", Service: &model.ServiceInfo{NLARequired: true},
 	}}
 	current := []model.Host{{
 		Endpoint: model.Endpoint{Address: "10.0.0.1", Port: 3389},
-		State: "open", Service: &model.ServiceInfo{NLARequired: false},
+		State:    "open", Service: &model.ServiceInfo{NLARequired: false},
 	}}
 	got := Evaluate(rules, Input{Scan: model.Scan{ID: "s"}, Hosts: current, PriorHosts: prior})
 	if len(got) != 1 || got[0].Event != "alert.nla_regressed" {

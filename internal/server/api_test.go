@@ -229,6 +229,63 @@ func TestCreateScanRequiresTargets(t *testing.T) {
 	}
 }
 
+func TestCreateScanWebhookAndADOptions(t *testing.T) {
+	env := newTestEnv(t, Config{
+		WebhookURL:   "https://default-hook.example/alert",
+		WebhookLevel: "high",
+	})
+	resp := postForm(t, env.http.URL+"/api/v1/scans", url.Values{
+		"targets":        {"127.0.0.1:3389"},
+		"ack_authorized": {"true"},
+		"webhook_url":    {"https://soar.example/webhook"},
+		"webhook_level":  {"critical"},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", resp.StatusCode, readBody(t, resp))
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	sc, err := env.store.GetScan(created.ID)
+	if err != nil {
+		t.Fatalf("get scan: %v", err)
+	}
+	if sc.Options.WebhookURL != "https://soar.example/webhook" {
+		t.Errorf("webhook_url = %q, want https://soar.example/webhook", sc.Options.WebhookURL)
+	}
+	if sc.Options.WebhookLevel != "critical" {
+		t.Errorf("webhook_level = %q, want critical", sc.Options.WebhookLevel)
+	}
+
+	// Test fallback to server default when webhook_url not specified in scan form
+	resp2 := postForm(t, env.http.URL+"/api/v1/scans", url.Values{
+		"targets":        {"127.0.0.1:3389"},
+		"ack_authorized": {"true"},
+	})
+	if resp2.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", resp2.StatusCode, readBody(t, resp2))
+	}
+	var created2 struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&created2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	sc2, err := env.store.GetScan(created2.ID)
+	if err != nil {
+		t.Fatalf("get scan: %v", err)
+	}
+	if sc2.Options.WebhookURL != "https://default-hook.example/alert" {
+		t.Errorf("fallback webhook_url = %q, want https://default-hook.example/alert", sc2.Options.WebhookURL)
+	}
+	if sc2.Options.WebhookLevel != "high" {
+		t.Errorf("fallback webhook_level = %q, want high", sc2.Options.WebhookLevel)
+	}
+}
+
 func TestReportCSV(t *testing.T) {
 	env := newTestEnv(t, Config{})
 	seededScan(t, env.store, "scan-csv0000000001", model.ScanCompleted)
@@ -244,7 +301,7 @@ func TestReportCSV(t *testing.T) {
 		t.Fatalf("content disposition = %q", cd)
 	}
 	body := readBody(t, resp)
-	if !strings.Contains(body, "scan_id,address,port,check_id,title,severity,status,cve,cvss,detected_at,evidence,remediation") {
+	if !strings.Contains(body, "scan_id,address,port,check_id,title,severity,status,cve,cvss,detected_at,compliance,evidence,remediation") {
 		t.Fatalf("csv header missing from body: %q", body)
 	}
 
@@ -324,6 +381,59 @@ func TestReportsExportScanSelector(t *testing.T) {
 	}
 	if len(pdfBody) < 100 || !bytes.HasPrefix(pdfBody, []byte("%PDF")) {
 		t.Fatalf("pdf export is not a PDF (%d bytes)", len(pdfBody))
+	}
+}
+
+func TestComparePDFEndpoint(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	scanA := model.Scan{
+		ID:        "scan-cmp-0001",
+		Name:      "Baseline Scan",
+		Status:    model.ScanCompleted,
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+		Options:   model.ScanOptions{Targets: []string{"10.0.0.1"}},
+	}
+	scanB := model.Scan{
+		ID:        "scan-cmp-0002",
+		Name:      "Remediated Scan",
+		Status:    model.ScanCompleted,
+		CreatedAt: time.Now().Add(-1 * time.Hour),
+		Options:   model.ScanOptions{Targets: []string{"10.0.0.1"}},
+	}
+	if err := env.store.CreateScan(scanA); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.store.CreateScan(scanB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Missing parameters
+	badResp := get(t, env.http.URL+"/api/v1/reports/compare-pdf")
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing params status = %d, want 400", badResp.StatusCode)
+	}
+
+	// Equal base and against
+	eqResp := get(t, env.http.URL+"/api/v1/reports/compare-pdf?base="+scanA.ID+"&against="+scanA.ID)
+	if eqResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("equal base and against status = %d, want 400", eqResp.StatusCode)
+	}
+
+	// Valid compare PDF
+	resp := get(t, env.http.URL+"/api/v1/reports/compare-pdf?base="+scanA.ID+"&against="+scanB.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compare-pdf status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/pdf" {
+		t.Errorf("content-type = %q, want application/pdf", ct)
+	}
+	pdfBody, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read compare-pdf: %v", err)
+	}
+	if !bytes.HasPrefix(pdfBody, []byte("%PDF")) {
+		t.Errorf("response body does not have %%PDF prefix (%d bytes)", len(pdfBody))
 	}
 }
 
@@ -915,6 +1025,12 @@ func TestCreateScanSingleCredAndPTHRedactsSecrets(t *testing.T) {
 			if stored.Options.AuthMode != tc.mode {
 				t.Fatalf("stored auth_mode = %q, want %q", stored.Options.AuthMode, tc.mode)
 			}
+			if stored.Options.EnableScreens {
+				t.Fatal("single/pth must not force EnableScreens; form omitted enable_screens")
+			}
+			if !stored.Options.EnableAuth {
+				t.Fatal("single/pth must force EnableAuth")
+			}
 			if tc.mode == model.AuthModeSingle && stored.Options.AuthPassword == "" {
 				t.Fatal("store must retain auth_password for the scan engine")
 			}
@@ -963,5 +1079,46 @@ func TestCreateScanRejectsInvalidAuthMode(t *testing.T) {
 	body := readBody(t, resp)
 	if !strings.Contains(body, "auth_mode") {
 		t.Fatalf("error body = %s", body)
+	}
+}
+
+func TestCreateScanWithNmapXMLUpload(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" version="7.94">
+  <host>
+    <status state="up"/>
+    <address addr="10.42.0.1" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="3389"><state state="open"/></port>
+    </ports>
+  </host>
+</nmaprun>`
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("name", "nmap-import-test")
+	part, _ := w.CreateFormFile("targets_file", "nmap.xml")
+	_, _ = part.Write([]byte(xmlData))
+	_ = w.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, env.http.URL+"/api/v1/scans", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 201/202/200; body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	var created scanCreated
+	_ = json.NewDecoder(resp.Body).Decode(&created)
+	scan, err := env.store.GetScan(created.ID)
+	if err != nil {
+		t.Fatalf("GetScan: %v", err)
+	}
+	if len(scan.Options.Targets) != 1 || scan.Options.Targets[0] != "10.42.0.1:3389" {
+		t.Fatalf("scan targets = %v, want [10.42.0.1:3389]", scan.Options.Targets)
 	}
 }

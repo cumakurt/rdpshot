@@ -184,13 +184,35 @@ footer {
     </tbody>
   </table>
 </section>
+{{if .ComplianceMatrix}}
+<section id="compliance-matrix">
+  <h2>Compliance & Audit Matrix</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Standard</th><th>Section</th><th>Benchmark Requirement</th><th>Findings</th><th>Hosts Affected</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .ComplianceMatrix}}<tr>
+        <td><strong>{{.Standard}}</strong></td>
+        <td>{{.Section}}</td>
+        <td>{{.Title}}</td>
+        <td>{{.Count}}</td>
+        <td class="wrap">{{.Hosts}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
 <section id="findings">
   <h2>Findings</h2>
   <table>
     <thead>
       <tr>
         <th>Severity</th><th>Check ID</th><th>Title</th><th>CVE</th><th>CVSS</th>
-        <th>Status</th><th>Host</th><th>Evidence</th><th>Remediation</th>
+        <th>Status</th><th>Host</th><th>Compliance</th><th>Evidence</th><th>Remediation</th>
       </tr>
     </thead>
     <tbody>
@@ -202,6 +224,7 @@ footer {
         <td>{{.CVSS}}</td>
         <td>{{.Status}}</td>
         <td>{{.HostPort}}</td>
+        <td><span class="text-xs">{{.Compliance}}</span></td>
         <td class="wrap">{{.Evidence}}</td>
         <td class="wrap">{{.Remediation}}</td>
       </tr>
@@ -216,7 +239,7 @@ footer {
       <tr>
         <th>Address</th><th>Port</th><th>State</th><th>NLA</th>
         <th>Negotiated Protocol</th><th>TLS Version</th>
-        <th>Certificate (Subject / Self-Signed)</th><th>OS Guess</th>
+        <th>Certificate (Subject / Self-Signed)</th><th>OS Guess</th><th>UDP Transport</th>
       </tr>
     </thead>
     <tbody>
@@ -229,6 +252,7 @@ footer {
         <td>{{.TLSVersion}}</td>
         <td class="wrap">{{.Certificate}}</td>
         <td>{{.OSGuess}}</td>
+        <td>{{.UDP}}</td>
       </tr>
       {{end}}
     </tbody>

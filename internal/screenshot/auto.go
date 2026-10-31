@@ -15,10 +15,11 @@ import (
 // present and both live paths fail, Grab returns an error instead of a
 // misleading "tooling unavailable" card.
 type AutoGrabber struct {
-	Primary   Grabber
-	Secondary Grabber
-	Fallback  Grabber
-	Logger    *slog.Logger
+	Primary             Grabber
+	Secondary           Grabber
+	Fallback            Grabber
+	PreferGoFramebuffer bool
+	Logger              *slog.Logger
 }
 
 // NewAutoGrabber builds the preferred capture chain writing into outputDir.
@@ -48,12 +49,20 @@ func (g *AutoGrabber) Available() error {
 	return ErrGrabberUnavailable
 }
 
-// Grab captures with FreeRDP when possible, otherwise Go framebuffer.
-// Pass-the-hash credentials skip FreeRDP (no cleartext for /from-stdin) and use
-// the Go CredSSP framebuffer path only.
+// Grab captures with FreeRDP when possible (password via /from-stdin, NT hash
+// via /pth restricted-admin), otherwise the Go framebuffer, otherwise evidence.
 func (g *AutoGrabber) Grab(ctx context.Context, ep model.Endpoint, cred model.Credential) (model.Screenshot, error) {
+	if g.PreferGoFramebuffer && g.Secondary != nil && g.Secondary.Available() == nil {
+		shot, err := g.Secondary.Grab(ctx, ep, cred)
+		if err == nil {
+			return shot, nil
+		}
+		g.Logger.Warn("preferred Go framebuffer capture failed; trying FreeRDP",
+			"address", ep.Address, "port", ep.Port, "error", err.Error())
+	}
+
 	var primaryErr error
-	freerdpAvailable := !cred.IsNTHash() && g.Primary != nil && g.Primary.Available() == nil
+	freerdpAvailable := g.Primary != nil && g.Primary.Available() == nil
 	if freerdpAvailable {
 		shot, err := g.Primary.Grab(ctx, ep, cred)
 		if err == nil {
@@ -86,16 +95,15 @@ func (g *AutoGrabber) Grab(ctx context.Context, ep model.Endpoint, cred model.Cr
 			"address", ep.Address, "port", ep.Port, "error", err.Error())
 	}
 
-	// FreeRDP tooling was present: do not store a synthetic evidence card as
-	// if it were a desktop screenshot — surface the real capture failure.
+	// FreeRDP tooling on PATH: do not store a synthetic evidence card as a
+	// desktop screenshot when live capture failed.
 	if freerdpAvailable {
-		if primaryErr != nil && secondaryErr != nil {
+		switch {
+		case primaryErr != nil && secondaryErr != nil:
 			return model.Screenshot{}, fmt.Errorf("screenshot: freerdp: %v; framebuffer: %w", primaryErr, secondaryErr)
-		}
-		if primaryErr != nil {
+		case primaryErr != nil:
 			return model.Screenshot{}, fmt.Errorf("screenshot: freerdp: %w", primaryErr)
-		}
-		if secondaryErr != nil {
+		case secondaryErr != nil:
 			return model.Screenshot{}, fmt.Errorf("screenshot: framebuffer: %w", secondaryErr)
 		}
 	}

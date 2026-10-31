@@ -76,7 +76,12 @@ func Capture(ctx context.Context, ep model.Endpoint, cred model.Credential, opts
 	defer raw.Close()
 	_ = raw.SetDeadline(time.Now().Add(opts.Timeout))
 
-	if err := WriteConnectionRequest(raw, "rdpshot", RequestedProtocols()); err != nil {
+	// Prefer PROTOCOL_HYBRID over HYBRID_EX for the graphics path. Offering
+	// HYBRID_EX makes modern Windows select it, and some hosts then reset the
+	// TLS session on MCS Connect-Initial even after a successful Early User
+	// Authorization Result. FreeRDP's /sec:nla similarly offers SSL|HYBRID only.
+	captureProtocols := ProtocolSSL | ProtocolHybrid
+	if err := WriteConnectionRequest(raw, "rdpshot", captureProtocols); err != nil {
 		return nil, err
 	}
 	neg, err := ReadConnectionConfirm(raw)
@@ -104,57 +109,76 @@ func Capture(ctx context.Context, ep model.Endpoint, cred model.Credential, opts
 		}
 		secret = credssp.AuthSecret{NTHash: hash}
 	}
-	client := &credssp.Client{Version: 6}
+	client := &credssp.Client{
+		Version:             6,
+		ExpectEarlyUserAuth: neg.SelectedProtocol == ProtocolHybridEx,
+	}
 	sess, err := client.HandshakeSessionWith(ctx, tlsConn, cred.Username, cred.Domain, secret)
 	if err != nil {
 		return nil, fmt.Errorf("rdp: CredSSP session: %w", err)
 	}
 	conn := sess.Conn
+	if neg.SelectedProtocol == ProtocolHybridEx {
+		if err := ReadEarlyUserAuthorizationResult(conn); err != nil {
+			return nil, err
+		}
+	}
 	br := bufio.NewReader(conn)
 
 	c := &captureClient{
-		conn:   conn,
-		br:     br,
-		opts:   opts,
-		fb:     NewFramebuffer(opts.DesktopWidth, opts.DesktopHeight),
-		source: 1001,
-		cache:  newBitmapCache(),
+		conn:       conn,
+		br:         br,
+		opts:       opts,
+		fb:         NewFramebuffer(opts.DesktopWidth, opts.DesktopHeight),
+		source:     1001,
+		dvcChannel: firstStaticChannelID + 3,
+		cache:      newBitmapCache(),
 	}
-	if err := c.runMCS(neg.SelectedProtocol); err != nil {
+	c.gfx = NewGFXDecoder(c.fb)
+	channels := []ChannelDef{
+		{Name: "rdpdr", Options: channelOptionInitialized | channelOptionCompressRDP, ID: firstStaticChannelID},
+		{Name: "rdpsnd", Options: channelOptionInitialized | channelOptionCompressRDP, ID: firstStaticChannelID + 1},
+		{Name: "cliprdr", Options: channelOptionInitialized | channelOptionCompressRDP, ID: firstStaticChannelID + 2},
+		{Name: "drdynvc", Options: channelOptionInitialized | channelOptionCompressRDP, ID: firstStaticChannelID + 3},
+	}
+	if err := c.runMCS(neg.SelectedProtocol, channels, neg.Flags); err != nil {
 		return nil, err
 	}
 	if err := c.sendClientInfo(cred); err != nil {
 		return nil, err
 	}
 	if err := c.loop(ctx); err != nil {
-		if c.bitmaps > 0 && c.fb.PaintedFraction() >= opts.MinPainted {
+		if (c.bitmaps+c.orders+c.gfx.FramesDecoded > 0) && c.fb.PaintedFraction() >= opts.MinPainted {
 			return c.fb.Img, nil
 		}
 		return nil, err
 	}
-	if c.bitmaps == 0 || c.fb.PaintedFraction() < opts.MinPainted {
+	if (c.bitmaps+c.orders+c.gfx.FramesDecoded == 0) || c.fb.PaintedFraction() < opts.MinPainted {
 		return nil, ErrCaptureNoBitmap
 	}
 	return c.fb.Img, nil
 }
 
 type captureClient struct {
-	conn      net.Conn
-	br        *bufio.Reader
-	opts      CaptureOptions
-	fb        *Framebuffer
-	userID    uint16
-	ioChannel uint16
-	shareID   uint32
-	source    uint16
-	bitmaps   int
-	orders    int
-	active    bool
-	cache     *bitmapCache
+	conn       net.Conn
+	br         *bufio.Reader
+	opts       CaptureOptions
+	fb         *Framebuffer
+	gfx        *GFXDecoder
+	dvcChannel uint16
+	gfxDVCID   uint32
+	userID     uint16
+	ioChannel  uint16
+	shareID    uint32
+	source     uint16
+	bitmaps    int
+	orders     int
+	active     bool
+	cache      *bitmapCache
 }
 
-func (c *captureClient) runMCS(selectedProtocol uint32) error {
-	gcc := BuildGCCClientData(selectedProtocol, nil)
+func (c *captureClient) runMCS(selectedProtocol uint32, channels []ChannelDef, negFlags byte) error {
+	gcc := BuildGCCClientDataExt(selectedProtocol, channels, negFlags)
 	if err := writeDataTPDU(c.conn, BuildConnectInitial(gcc)); err != nil {
 		return err
 	}
@@ -191,7 +215,7 @@ func (c *captureClient) runMCS(selectedProtocol uint32) error {
 	c.userID = attach.UserID
 	c.source = c.userID + MCSUserChannelBase
 
-	for _, ch := range []uint16{c.userID + MCSUserChannelBase, c.ioChannel} {
+	for _, ch := range []uint16{c.userID + MCSUserChannelBase, c.ioChannel, c.dvcChannel} {
 		if err := writeDataTPDU(c.conn, buildChannelJoinRequest(c.userID, ch)); err != nil {
 			return err
 		}
@@ -262,19 +286,56 @@ func (c *captureClient) loop(ctx context.Context) error {
 		if pdu.Type != mcsSendDataIndication || len(pdu.Payload) == 0 {
 			continue
 		}
+		if pdu.ChannelID == c.dvcChannel {
+			c.handleDVCData(pdu.Payload)
+			if c.gfx.FramesDecoded > 0 && c.fb.PaintedFraction() >= c.opts.MinPainted {
+				return nil
+			}
+			continue
+		}
 		if err := c.handleUserData(pdu.Payload); err != nil {
 			return err
 		}
-		if c.active && c.bitmaps+c.orders > 0 && c.fb.PaintedFraction() >= c.opts.MinPainted {
-			if c.bitmaps+c.orders >= 3 {
+		totalDecoded := c.bitmaps + c.orders + c.gfx.FramesDecoded
+		if c.active && totalDecoded > 0 && c.fb.PaintedFraction() >= c.opts.MinPainted {
+			if totalDecoded >= 3 {
 				return nil
 			}
 		}
 	}
-	if c.bitmaps+c.orders > 0 {
+	if c.bitmaps+c.orders+c.gfx.FramesDecoded > 0 {
 		return nil
 	}
 	return ErrCaptureNoBitmap
+}
+
+func (c *captureClient) handleDVCData(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	cmd := data[0] >> 4
+	switch cmd {
+	case dvcCmdCreateRequest:
+		chID, name, err := ParseDVCCreateRequest(data)
+		if err == nil && name == DVCGraphicsChannelName {
+			c.gfxDVCID = chID
+			c.gfx.GraphicsChannel = chID
+			c.gfx.Active = true
+			// Acknowledge DVC creation
+			rsp := BuildDVCCreateResponse(chID, 0)
+			_ = writeDataTPDU(c.conn, buildSendDataRequest(c.userID, c.dvcChannel, rsp))
+			// Send client capability advertisement
+			adv := BuildCapsAdvertise()
+			dvcAdv := BuildDVCData(chID, adv)
+			_ = writeDataTPDU(c.conn, buildSendDataRequest(c.userID, c.dvcChannel, dvcAdv))
+		}
+	case dvcCmdData, dvcCmdDataFirst:
+		chID, gfxPayload, err := ParseDVCData(data)
+		if err == nil && (chID == c.gfxDVCID || c.gfxDVCID == 0) {
+			n, _ := c.gfx.DecodePDU(gfxPayload)
+			c.bitmaps += n
+		}
+	}
 }
 
 func (c *captureClient) handleUserData(data []byte) error {

@@ -32,11 +32,17 @@ const (
 
 // GCC client data block types (MS-RDPBCGR 2.2.1.3).
 const (
-	csCore     uint16 = 0xC001
-	csSecurity uint16 = 0xC002
-	csNet      uint16 = 0xC003
-	csCluster  uint16 = 0xC004
+	csCore           uint16 = 0xC001
+	csSecurity       uint16 = 0xC002
+	csNet            uint16 = 0xC003
+	csCluster        uint16 = 0xC004
+	csMonitor        uint16 = 0xC005
+	csMCSMsgChannel  uint16 = 0xC006
+	csMultitransport uint16 = 0xC008
 )
+
+// RDP_NEG_RSP flag: server accepts extended client data blocks.
+const NegFlagExtendedClientDataSupported byte = 0x01
 
 // MCS channel identifiers used by RDP (MS-RDPBCGR 2.2.1.3.4).
 const (
@@ -130,16 +136,27 @@ func BuildConnectInitial(gcc []byte) []byte {
 // BuildGCCClientData builds the T.124 ConferenceCreateRequest user data with
 // the client core, cluster, security and network data blocks.
 func BuildGCCClientData(requestedProtocols uint32, channels []ChannelDef) []byte {
+	return BuildGCCClientDataExt(requestedProtocols, channels, 0)
+}
+
+// BuildGCCClientDataExt is BuildGCCClientData plus optional extended client
+// data blocks when negFlags includes EXTENDED_CLIENT_DATA_SUPPORTED.
+func BuildGCCClientDataExt(requestedProtocols uint32, channels []ChannelDef, negFlags byte) []byte {
 	core := buildClientCoreData(requestedProtocols)
 	cluster := buildClientClusterData()
 	security := buildClientSecurityData()
 	network := buildClientNetworkData(channels)
 
-	blocks := make([]byte, 0, 300)
+	blocks := make([]byte, 0, 400)
 	blocks = append(blocks, core...)
-	blocks = append(blocks, cluster...)
 	blocks = append(blocks, security...)
 	blocks = append(blocks, network...)
+	blocks = append(blocks, cluster...)
+	if negFlags&NegFlagExtendedClientDataSupported != 0 {
+		blocks = append(blocks, buildClientMonitorData(1024, 768)...)
+		blocks = append(blocks, buildClientMCSMsgChannelData()...)
+		blocks = append(blocks, buildClientMultitransportData()...)
+	}
 
 	// T.124 ConferenceCreateRequest envelope. The two PER length determinants
 	// cover (envelope tail + blocks) and (blocks) respectively; the byte layout
@@ -171,19 +188,21 @@ func buildClientCoreData(requestedProtocols uint32) []byte {
 		name[i*2] = byte(r)
 	}
 	body = append(body, name...)
-	body = binary.LittleEndian.AppendUint32(body, 4)                  // keyboardType
-	body = binary.LittleEndian.AppendUint32(body, 0)                  // keyboardSubType
-	body = binary.LittleEndian.AppendUint32(body, 0)                  // keyboardFunctionKey
-	body = append(body, make([]byte, 64)...)                          // imeFileName
-	body = binary.LittleEndian.AppendUint16(body, 0xCA01)             // postBeta2ColorDepth
-	body = binary.LittleEndian.AppendUint16(body, 1)                  // clientProductId
-	body = binary.LittleEndian.AppendUint32(body, 0)                  // serialNumber
-	body = binary.LittleEndian.AppendUint16(body, 24)                 // highColorDepth
-	body = binary.LittleEndian.AppendUint16(body, 0x0700)             // supportedColorDepths
-	body = binary.LittleEndian.AppendUint16(body, 0x0001)             // earlyCapabilityFlags
-	body = append(body, make([]byte, 64)...)                          // clientDigProductId
-	body = append(body, 0x00, 0x00)                                   // connectionType + pad
-	body = binary.LittleEndian.AppendUint32(body, requestedProtocols) // serverSelectedProtocol
+	body = binary.LittleEndian.AppendUint32(body, 4)      // keyboardType
+	body = binary.LittleEndian.AppendUint32(body, 0)      // keyboardSubType
+	body = binary.LittleEndian.AppendUint32(body, 0)      // keyboardFunctionKey
+	body = append(body, make([]byte, 64)...)              // imeFileName
+	body = binary.LittleEndian.AppendUint16(body, 0xCA01) // postBeta2ColorDepth
+	body = binary.LittleEndian.AppendUint16(body, 1)      // clientProductId
+	body = binary.LittleEndian.AppendUint32(body, 0)      // serialNumber
+	body = binary.LittleEndian.AppendUint16(body, 24)     // highColorDepth
+	body = binary.LittleEndian.AppendUint16(body, 0x0700) // supportedColorDepths
+	// Match common FreeRDP flags: valid connection type, skip channel join,
+	// heartbeat, dyn timezone, netchar autodetect, relative mouse.
+	body = binary.LittleEndian.AppendUint16(body, 0x0eb0) // earlyCapabilityFlags
+	body = append(body, make([]byte, 64)...)              // clientDigProductId
+	body = append(body, 0x06, 0x00)                       // connectionType=broadband + pad
+	body = binary.LittleEndian.AppendUint32(body, requestedProtocols)
 	return appendBlock(nil, csCore, body)
 }
 
@@ -197,17 +216,17 @@ func buildClientClusterData() []byte {
 
 func buildClientSecurityData() []byte {
 	body := make([]byte, 0, 8)
-	// 40-bit and 128-bit RC4 support advertised; the probe itself never
-	// negotiates legacy encryption keys.
-	body = binary.LittleEndian.AppendUint32(body, 0x00000003)
+	// Under Enhanced RDP Security (TLS/CredSSP) the encryption method must be
+	// ENCRYPTION_METHOD_NONE; advertising legacy RC4 can make modern hosts
+	// abort MCS Connect-Initial after NLA.
+	body = binary.LittleEndian.AppendUint32(body, 0)
 	body = binary.LittleEndian.AppendUint32(body, 0) // extEncryptionMethods
 	return appendBlock(nil, csSecurity, body)
 }
 
 func buildClientNetworkData(channels []ChannelDef) []byte {
-	if len(channels) == 0 {
-		return nil
-	}
+	// Always emit CS_NET (channelCount may be zero). Omitting the block is
+	// accepted by some servers but rejected by others during NLA sessions.
 	body := make([]byte, 0, 8+12*len(channels))
 	body = binary.LittleEndian.AppendUint32(body, uint32(len(channels)))
 	for _, ch := range channels {
@@ -217,6 +236,30 @@ func buildClientNetworkData(channels []ChannelDef) []byte {
 		body = binary.LittleEndian.AppendUint32(body, ch.Options)
 	}
 	return appendBlock(nil, csNet, body)
+}
+
+func buildClientMonitorData(width, height int) []byte {
+	// TS_UD_CS_MONITOR with a single primary monitor (MS-RDPBCGR 2.2.1.3.6).
+	body := make([]byte, 0, 4+20)
+	body = binary.LittleEndian.AppendUint32(body, 0) // flags
+	body = binary.LittleEndian.AppendUint32(body, 0) // monitorCount-1 => 1 monitor
+	body = binary.LittleEndian.AppendUint32(body, 0) // left
+	body = binary.LittleEndian.AppendUint32(body, 0) // top
+	body = binary.LittleEndian.AppendUint32(body, uint32(width-1))
+	body = binary.LittleEndian.AppendUint32(body, uint32(height-1))
+	body = binary.LittleEndian.AppendUint32(body, 1) // MONITOR_PRIMARY
+	return appendBlock(nil, csMonitor, body)
+}
+
+func buildClientMCSMsgChannelData() []byte {
+	body := binary.LittleEndian.AppendUint32(nil, 0) // flags
+	return appendBlock(nil, csMCSMsgChannel, body)
+}
+
+func buildClientMultitransportData() []byte {
+	// UDP FECR + FECL (MS-RDPBCGR 2.2.1.3.8).
+	body := binary.LittleEndian.AppendUint32(nil, 0x00000005)
+	return appendBlock(nil, csMultitransport, body)
 }
 
 // appendBlock appends a GCC data block header (type + length) and its body.

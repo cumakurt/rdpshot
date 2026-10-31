@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"io"
 	"strconv"
+	"strings"
 
 	"rdpshot/internal/about"
 	"rdpshot/internal/model"
@@ -22,24 +23,25 @@ var reportTemplate = template.Must(template.New("report.html").Parse(reportTempl
 // is a plain string or number so html/template auto-escapes all target-derived
 // content.
 type htmlView struct {
-	ToolName     string
-	ToolVersion  string
-	Developer    string
-	Copyright    string
-	GeneratedAt  string
-	Organization string
-	Engagement   string
-	PreparedBy   string
-	FooterNote   string
-	LogoDataURI  template.URL
-	Scan         scanView
-	Cards        []cardView
-	TopFindings  []findingView
-	Severity     []severityBucket
-	Findings     []findingView
-	Hosts        []hostView
-	Credentials  []credentialView
-	Screenshots  []screenshotView
+	ToolName         string
+	ToolVersion      string
+	Developer        string
+	Copyright        string
+	GeneratedAt      string
+	Organization     string
+	Engagement       string
+	PreparedBy       string
+	FooterNote       string
+	LogoDataURI      template.URL
+	Scan             scanView
+	Cards            []cardView
+	TopFindings      []findingView
+	Severity         []severityBucket
+	ComplianceMatrix []complianceMatrixRow
+	Findings         []findingView
+	Hosts            []hostView
+	Credentials      []credentialView
+	Screenshots      []screenshotView
 }
 
 type scanView struct {
@@ -65,6 +67,15 @@ type findingView struct {
 	HostPort      string
 	Evidence      string
 	Remediation   string
+	Compliance    string
+}
+
+type complianceMatrixRow struct {
+	Standard string
+	Section  string
+	Title    string
+	Count    int
+	Hosts    string
 }
 
 type hostView struct {
@@ -76,6 +87,7 @@ type hostView struct {
 	TLSVersion  string
 	Certificate string
 	OSGuess     string
+	UDP         string
 }
 
 type credentialView struct {
@@ -127,6 +139,10 @@ func buildHTMLView(d Data) htmlView {
 		Severity: severityBuckets(d),
 	}
 	for _, f := range sortedFindings(d.Findings) {
+		var compParts []string
+		for _, c := range f.Compliance {
+			compParts = append(compParts, c.Standard+" "+c.Section)
+		}
 		row := findingView{
 			Severity:      string(f.Severity),
 			SeverityClass: severityClass(f.Severity),
@@ -138,11 +154,44 @@ func buildHTMLView(d Data) htmlView {
 			HostPort:      endpointText(f.Address, f.Port),
 			Evidence:      orDash(singleLine(f.Evidence)),
 			Remediation:   orDash(singleLine(f.Remediation)),
+			Compliance:    orDash(strings.Join(compParts, ", ")),
 		}
 		view.Findings = append(view.Findings, row)
 		if len(view.TopFindings) < 3 && (f.Status == model.FindingVulnerable || f.Status == model.FindingPotential) {
 			view.TopFindings = append(view.TopFindings, row)
 		}
+	}
+	type compKey struct {
+		Standard string
+		Section  string
+	}
+	compMap := make(map[compKey]*complianceMatrixRow)
+	var compKeys []compKey
+	for _, f := range d.Findings {
+		for _, c := range f.Compliance {
+			k := compKey{Standard: c.Standard, Section: c.Section}
+			row, exists := compMap[k]
+			if !exists {
+				row = &complianceMatrixRow{
+					Standard: c.Standard,
+					Section:  c.Section,
+					Title:    c.Title,
+				}
+				compMap[k] = row
+				compKeys = append(compKeys, k)
+			}
+			row.Count++
+			ep := endpointText(f.Address, f.Port)
+			if !strings.Contains(row.Hosts, ep) {
+				if row.Hosts != "" {
+					row.Hosts += ", "
+				}
+				row.Hosts += ep
+			}
+		}
+	}
+	for _, k := range compKeys {
+		view.ComplianceMatrix = append(view.ComplianceMatrix, *compMap[k])
 	}
 	for _, h := range d.Hosts {
 		view.Hosts = append(view.Hosts, hostRow(h))
@@ -236,6 +285,11 @@ func hostRow(h model.Host) hostView {
 		if svc.Certificate.SelfSigned {
 			row.Certificate += " (self-signed)"
 		}
+	}
+	if svc.UDPRDPAcceleration {
+		row.UDP = "Accelerated (MS-RDPEUDP)"
+	} else if svc.UDP3389 {
+		row.UDP = "Reachable"
 	}
 	return row
 }

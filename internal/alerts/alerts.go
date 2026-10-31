@@ -13,13 +13,13 @@ import (
 
 // Input carries everything Evaluate needs for SLA-style post-scan checks.
 type Input struct {
-	Scan             model.Scan
-	Summary          model.Summary
-	Hosts            []model.Host
-	PriorHosts       []model.Host
-	Findings         []model.Finding
-	HardeningScore   int
-	CredReuseMax     int
+	Scan           model.Scan
+	Summary        model.Summary
+	Hosts          []model.Host
+	PriorHosts     []model.Host
+	Findings       []model.Finding
+	HardeningScore int
+	CredReuseMax   int
 }
 
 // Evaluate decides which alert events to fire for a finished scan.

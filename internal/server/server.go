@@ -76,6 +76,8 @@ type Config struct {
 	// MaxConcurrentScans bounds how many engine runs execute at once.
 	// Zero defaults to 2. Excess scans stay pending until a slot frees.
 	MaxConcurrentScans int
+	WebhookURL         string
+	WebhookLevel       string
 }
 
 // Dependencies are the collaborators the server reads from and starts work on.
@@ -269,6 +271,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/scans/{id}/credentials", s.handleScanCredentials)
 	mux.HandleFunc("GET /api/v1/scans/{id}/report", s.handleScanReport)
 	mux.HandleFunc("GET /api/v1/reports/export", s.handleReportsExport)
+	mux.HandleFunc("GET /api/v1/reports/compare-pdf", s.handleComparePDF)
 	mux.HandleFunc("GET /api/v1/schedules", s.handleListSchedules)
 	mux.HandleFunc("POST /api/v1/schedules", s.handleCreateSchedule)
 	mux.HandleFunc("GET /api/v1/schedules/{id}", s.handleGetSchedule)

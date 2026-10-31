@@ -9,10 +9,10 @@ import (
 
 // Fast-path update codes (MS-RDPBCGR 2.2.9.1.2.1).
 const (
-	fastPathOrders       byte = 0x0
-	fastPathBitmap       byte = 0x1
-	fastPathPalette      byte = 0x2
-	fastPathSynchronize  byte = 0x3
+	fastPathOrders      byte = 0x0
+	fastPathBitmap      byte = 0x1
+	fastPathPalette     byte = 0x2
+	fastPathSynchronize byte = 0x3
 )
 
 // isFastPathHeader reports whether b looks like a fast-path TPKT alternative

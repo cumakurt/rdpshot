@@ -64,8 +64,10 @@ func catalog() []check {
 				if in.Service == nil {
 					return "", ""
 				}
+				// NLA enforced → misconfiguration absent; omit (do not emit a
+				// high-severity "not enforced" row marked not_vulnerable).
 				if in.Service.NLARequired {
-					return model.FindingNotVulnerable, "server requires CredSSP/NLA before the session is established"
+					return "", ""
 				}
 				// Only assert missing NLA when negotiation clearly selected a
 				// non-CredSSP path (standard RDP or TLS-only).
@@ -144,6 +146,23 @@ func catalog() []check {
 			cvss:        5.3,
 			remediation: "Disable TLS 1.0/1.1 and SSL 3.0 on the RDP listener and remove RC4/3DES cipher suites.",
 			evaluate:    evaluateWeakTLS,
+		},
+		{
+			id:          "tls-legacy-1.0-1.1",
+			title:       "Obsolete TLS 1.0 / 1.1 protocol supported",
+			severity:    model.SeverityMedium,
+			cvss:        5.3,
+			remediation: "Disable TLS 1.0 and TLS 1.1 in Schannel protocols registry and require TLS 1.2 or higher.",
+			evaluate:    evaluateLegacyTLS,
+		},
+		{
+			id:          "tls-weak-cipher",
+			title:       "Weak or deprecated TLS cipher suite supported",
+			severity:    model.SeverityMedium,
+			cve:         "CVE-2016-2183",
+			cvss:        5.9,
+			remediation: "Configure cipher suites in Group Policy to disable RC4, 3DES/Sweet32, and CBC suites; enforce AES-GCM.",
+			evaluate:    evaluateWeakCipher,
 		},
 		{
 			id:          "self-signed-cert",
@@ -289,6 +308,97 @@ func catalog() []check {
 				return model.FindingNotVulnerable, ev
 			},
 		},
+		{
+			id:          "mfa-enforced",
+			title:       "Multi-factor authentication (MFA) layer detected",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Maintain MFA enforcement across all external and internal RDP access vectors.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.MFAEnforced {
+					return "", ""
+				}
+				ev := "MFA layer confirmed"
+				if in.Service.SecurityGateway != "" {
+					ev = in.Service.SecurityGateway + ": "
+				}
+				if in.Service.Evidence != nil && in.Service.Evidence["mfa"] != "" {
+					ev += in.Service.Evidence["mfa"]
+				}
+				return model.FindingNotVulnerable, strings.TrimSpace(ev)
+			},
+		},
+		{
+			id:          "pam-proxy-detected",
+			title:       "Privileged Access Management (PAM) gateway detected",
+			severity:    model.SeverityInfo,
+			cvss:        0,
+			remediation: "Ensure all administrative RDP sessions are proxied, recorded, and audited through the PAM solution.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.PAMProxy {
+					return "", ""
+				}
+				ev := "PAM gateway confirmed"
+				if in.Service.SecurityGateway != "" {
+					ev = in.Service.SecurityGateway + ": "
+				}
+				if in.Service.Evidence != nil && in.Service.Evidence["pam"] != "" {
+					ev += in.Service.Evidence["pam"]
+				}
+				return model.FindingNotVulnerable, strings.TrimSpace(ev)
+			},
+		},
+		{
+			id:          "rdp-honeypot-detected",
+			title:       "RDP Deception / Honeypot Endpoint Detected",
+			severity:    model.SeverityMedium,
+			cvss:        0,
+			remediation: "Verify whether this endpoint is an authorized deception trap or an unauthorized decoy on the network.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.HoneypotDetected {
+					return "", ""
+				}
+				ev := in.Service.HoneypotReason
+				if in.Service.Evidence != nil && in.Service.Evidence["honeypot"] != "" {
+					ev += " (" + in.Service.Evidence["honeypot"] + ")"
+				}
+				return model.FindingPotential, strings.TrimSpace(ev)
+			},
+		},
+		{
+			id:          "rdp-nla-downgrade-vulnerable",
+			title:       "RDP NLA Downgrade / MitM Susceptibility",
+			severity:    model.SeverityHigh,
+			cvss:        7.5,
+			remediation: "Strictly enforce Network Level Authentication (NLA) via GPO and reject clients requesting TLS-only negotiation without HYBRID flags.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.NLADowngradeVulnerable {
+					return "", ""
+				}
+				ev := in.Service.NLADowngradeEvidence
+				if ev == "" {
+					ev = "Server accepted TLS-only negotiation when client omitted NLA flags"
+				}
+				return model.FindingVulnerable, ev
+			},
+		},
+		{
+			id:          "rdp-shadow-unprompted-exposed",
+			title:       "Unprompted RDP Session Shadowing Permitted",
+			severity:    model.SeverityHigh,
+			cvss:        7.8,
+			remediation: "Set GPO 'Set rules for remote control of Remote Desktop Services user sessions' to 'Full Control with user's permission' or 'Disabled'.",
+			evaluate: func(in Input) (model.FindingStatus, string) {
+				if in.Service == nil || !in.Service.ShadowUnprompted {
+					return "", ""
+				}
+				ev := in.Service.ShadowPolicy
+				if ev == "" {
+					ev = "Server permits remote session control without user consent or prompt"
+				}
+				return model.FindingVulnerable, ev
+			},
+		},
 	}
 }
 
@@ -383,6 +493,42 @@ func evaluateWeakTLS(in Input) (model.FindingStatus, string) {
 	return model.FindingVulnerable, strings.Join(issues, "; ")
 }
 
+func evaluateLegacyTLS(in Input) (model.FindingStatus, string) {
+	if in.Service == nil {
+		return "", ""
+	}
+	var legacy []string
+	for _, v := range in.Service.SupportedTLSVersions {
+		if rdp.IsLegacyTLSVersion(v) {
+			legacy = append(legacy, v)
+		}
+	}
+	if len(legacy) == 0 && rdp.IsLegacyTLSVersion(in.Service.TLSVersion) {
+		legacy = append(legacy, in.Service.TLSVersion)
+	}
+	if len(legacy) > 0 {
+		return model.FindingVulnerable, "endpoint accepts obsolete TLS: " + strings.Join(legacy, ", ")
+	}
+	return "", ""
+}
+
+func evaluateWeakCipher(in Input) (model.FindingStatus, string) {
+	if in.Service == nil {
+		return "", ""
+	}
+	var weak []string
+	for _, c := range in.Service.WeakCiphers {
+		weak = append(weak, c)
+	}
+	if len(weak) == 0 && rdp.IsWeakCipherSuite(in.Service.TLSCipherSuite) {
+		weak = append(weak, in.Service.TLSCipherSuite)
+	}
+	if len(weak) > 0 {
+		return model.FindingVulnerable, "weak cipher suite accepted: " + strings.Join(weak, ", ")
+	}
+	return "", ""
+}
+
 // Evaluate runs every applicable check against one endpoint and returns the
 // findings. Conditions that are clearly absent are not reported. Speculative
 // potential/inconclusive outcomes are filtered out so only confirmed
@@ -409,6 +555,7 @@ func Evaluate(ep model.Endpoint, in Input) []model.Finding {
 			CVSS:        c.cvss,
 			Evidence:    evidence,
 			Remediation: c.remediation,
+			Compliance:  model.LookupCompliance(c.id),
 			DetectedAt:  now,
 		})
 	}

@@ -91,7 +91,7 @@ func (s *Server) handleUpdateScanMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "scan.meta", scan.ID, engagement)
-	s.writeJSON(w, http.StatusOK, updated)
+	s.writeJSON(w, http.StatusOK, redactScan(updated))
 }
 
 // handleTrend returns posture samples for the reports hub.

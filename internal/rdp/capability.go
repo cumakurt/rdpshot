@@ -99,8 +99,8 @@ func capSetGeneral() []byte {
 	b = binary.LittleEndian.AppendUint16(b, osMajorWindows)
 	b = binary.LittleEndian.AppendUint16(b, osMinorNT)
 	b = binary.LittleEndian.AppendUint16(b, protocolVer)
-	b = binary.LittleEndian.AppendUint16(b, 0) // pad
-	b = binary.LittleEndian.AppendUint16(b, 0) // compressionTypes
+	b = binary.LittleEndian.AppendUint16(b, 0)      // pad
+	b = binary.LittleEndian.AppendUint16(b, 0)      // compressionTypes
 	b = binary.LittleEndian.AppendUint16(b, 0x0401) // extraFlags: NO_BITMAP_COMPRESSION_HDR | FASTPATH_OUTPUT_SUPPORTED off
 	b = binary.LittleEndian.AppendUint16(b, 0)
 	b = binary.LittleEndian.AppendUint16(b, 0)
@@ -111,19 +111,19 @@ func capSetGeneral() []byte {
 
 func capSetBitmap(w, h uint16) []byte {
 	b := make([]byte, 0, 24)
-	b = binary.LittleEndian.AppendUint16(b, 1)  // preferredBitsPerPixel = 16 initially; server may pick 24/32
-	b = binary.LittleEndian.AppendUint16(b, 1)  // receive1Bit
-	b = binary.LittleEndian.AppendUint16(b, 1)  // receive4Bit
-	b = binary.LittleEndian.AppendUint16(b, 1)  // receive8Bit
+	b = binary.LittleEndian.AppendUint16(b, 1) // preferredBitsPerPixel = 16 initially; server may pick 24/32
+	b = binary.LittleEndian.AppendUint16(b, 1) // receive1Bit
+	b = binary.LittleEndian.AppendUint16(b, 1) // receive4Bit
+	b = binary.LittleEndian.AppendUint16(b, 1) // receive8Bit
 	b = binary.LittleEndian.AppendUint16(b, w)
 	b = binary.LittleEndian.AppendUint16(b, h)
-	b = binary.LittleEndian.AppendUint16(b, 0)  // pad
-	b = binary.LittleEndian.AppendUint16(b, 1)  // allowResize
-	b = binary.LittleEndian.AppendUint16(b, 1)  // bitmapCompression
-	b = binary.LittleEndian.AppendUint16(b, 0)  // highColorFlags
-	b = binary.LittleEndian.AppendUint16(b, 1)  // drawingFlags: DRAW_ALLOW_SKIP
-	b = binary.LittleEndian.AppendUint16(b, 1)  // multipleRectangleSupport
-	b = binary.LittleEndian.AppendUint16(b, 0)  // pad
+	b = binary.LittleEndian.AppendUint16(b, 0) // pad
+	b = binary.LittleEndian.AppendUint16(b, 1) // allowResize
+	b = binary.LittleEndian.AppendUint16(b, 1) // bitmapCompression
+	b = binary.LittleEndian.AppendUint16(b, 0) // highColorFlags
+	b = binary.LittleEndian.AppendUint16(b, 1) // drawingFlags: DRAW_ALLOW_SKIP
+	b = binary.LittleEndian.AppendUint16(b, 1) // multipleRectangleSupport
+	b = binary.LittleEndian.AppendUint16(b, 0) // pad
 	return capHeader(capBitmap, uint16(4+len(b)), b)
 }
 
@@ -133,7 +133,7 @@ func capSetOrder() []byte {
 	b = binary.LittleEndian.AppendUint32(b, 0)
 	b = binary.LittleEndian.AppendUint16(b, 1) // maximumOrderLevel
 	b = binary.LittleEndian.AppendUint16(b, 20)
-	b = binary.LittleEndian.AppendUint16(b, 0) // numberFonts
+	b = binary.LittleEndian.AppendUint16(b, 0)      // numberFonts
 	b = binary.LittleEndian.AppendUint16(b, 0x0022) // orderFlags: NEGOTIATEORDERSUPPORT | COLORINDEXSUPPORT
 	b = append(b, make([]byte, 32)...)              // orderSupport — all zero (no drawing orders)
 	b = binary.LittleEndian.AppendUint16(b, 0)
@@ -249,8 +249,8 @@ func buildControlPDU(shareID uint32, source uint16, action uint16) []byte {
 
 func buildFontListPDU(shareID uint32, source uint16) []byte {
 	payload := make([]byte, 8)
-	binary.LittleEndian.PutUint16(payload[0:2], 0) // numberFonts
-	binary.LittleEndian.PutUint16(payload[2:4], 0) // totalNumFonts
+	binary.LittleEndian.PutUint16(payload[0:2], 0)      // numberFonts
+	binary.LittleEndian.PutUint16(payload[2:4], 0)      // totalNumFonts
 	binary.LittleEndian.PutUint16(payload[4:6], 0x0003) // listFlags: FIRST | LAST
 	binary.LittleEndian.PutUint16(payload[6:8], 0x0032) // entrySize
 	return buildShareDataPDU(shareID, source, pduType2FontList, payload)

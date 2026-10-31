@@ -9,8 +9,8 @@ import (
 
 // BITMAP_DATA flags (MS-RDPBCGR 2.2.9.1.1.3.1.2.1).
 const (
-	bitmapCompression       uint16 = 0x0001
-	bitmapNoCompressionHDR  uint16 = 0x0400
+	bitmapCompression      uint16 = 0x0001
+	bitmapNoCompressionHDR uint16 = 0x0400
 )
 
 // Framebuffer is a mutable RGBA desktop surface filled by bitmap updates.

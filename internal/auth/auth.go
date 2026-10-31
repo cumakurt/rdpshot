@@ -21,13 +21,13 @@ import (
 
 // Classified errors; callers use errors.Is.
 var (
-	ErrAuthFailed         = errors.New("authentication failed")
-	ErrAccountLocked      = errors.New("account locked or disabled")
-	ErrSmartCardRequired  = errors.New("smart-card logon required")
-	ErrNLARequired        = errors.New("endpoint does not support NLA authentication")
-	ErrProtocol           = errors.New("protocol error")
-	ErrTimeout            = errors.New("timeout")
-	ErrNetwork            = errors.New("network error")
+	ErrAuthFailed        = errors.New("authentication failed")
+	ErrAccountLocked     = errors.New("account locked or disabled")
+	ErrSmartCardRequired = errors.New("smart-card logon required")
+	ErrNLARequired       = errors.New("endpoint does not support NLA authentication")
+	ErrProtocol          = errors.New("protocol error")
+	ErrTimeout           = errors.New("timeout")
+	ErrNetwork           = errors.New("network error")
 )
 
 // Authenticator verifies one credential against one RDP endpoint.
@@ -109,6 +109,9 @@ func (a *credSSPAuthenticator) Authenticate(ctx context.Context, ep model.Endpoi
 }
 
 func secretFromCredential(cred model.Credential) (credssp.AuthSecret, error) {
+	if cred.Method == model.CredMethodKerberos {
+		return credssp.AuthSecret{CCachePath: cred.Secret}, nil
+	}
 	if cred.IsNTHash() {
 		hash, err := ntlm.ParseNTHash(cred.Secret)
 		if err != nil {

@@ -10,9 +10,9 @@ import (
 func TestBuildManifestStableHash(t *testing.T) {
 	scan := model.Scan{ID: "scan_1", Name: "demo", Engagement: "acme"}
 	files := map[string][]byte{
-		"meta.json":     []byte(`{"ok":true}`),
-		"findings.csv":  []byte("a,b\n"),
-		"report.html":   []byte("<html></html>"),
+		"meta.json":    []byte(`{"ok":true}`),
+		"findings.csv": []byte("a,b\n"),
+		"report.html":  []byte("<html></html>"),
 	}
 	m1, err := BuildManifest(scan, files)
 	if err != nil {

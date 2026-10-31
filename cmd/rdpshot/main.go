@@ -189,6 +189,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	enableVuln := fs.Bool("enable-vuln", true, "run the vulnerability checks")
 	enableAuth := fs.Bool("enable-auth", false, "run the credential audit (requires --ack-authorized)")
 	enableScreens := fs.Bool("enable-screens", false, "capture session screenshots (requires --ack-authorized)")
+	enableUDP := fs.Bool("enable-udp", false, "probe MS-RDPEUDP (UDP/3389) transport acceleration")
 	ackAuthorized := fs.Bool("ack-authorized", false, "confirm you are authorized to test these targets")
 	userWordlist := fs.String("user-wordlist", def.UserWordlist, "username wordlist for the credential audit")
 	passwordWordlist := fs.String("password-wordlist", def.PasswordWordlist, "password wordlist for the credential audit")
@@ -197,11 +198,20 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	authDomain := fs.String("auth-domain", "", "default domain for all auth modes (wordlist/single/pth)")
 	authPassword := fs.String("auth-password", "", "password for single auth mode")
 	authNTHash := fs.String("auth-nthash", "", "NT hash (32 hex or LM:NT) for pth auth mode")
+	authCCache := fs.String("auth-ccache", "", "path to Kerberos credentials cache (.ccache) for pass-the-ticket")
 	reportFormat := fs.String("report", "html", "report to generate after the scan: none, html, csv or pdf")
 	reportDir := fs.String("report-dir", "", "directory for generated reports (default: <outputs>/reports)")
 	dbPath := fs.String("db", def.DBPath, "path to the SQLite database")
 	outputsDir := fs.String("outputs", def.OutputsDir, "directory for reports and screenshots")
 	configPath := fs.String("config", "", "path to a JSON configuration file")
+	importFile := fs.String("import-file", "", "path to Nmap XML, Masscan JSON or list file to import targets from")
+	importNmap := fs.String("import-nmap", "", "alias for --import-file (import Nmap XML -oX output)")
+	adServer := fs.String("ad-server", "", "Active Directory domain controller host/IP for LDAP discovery")
+	adDomain := fs.String("ad-domain", "", "Active Directory domain name (e.g. corp.example.com)")
+	adUser := fs.String("ad-user", "", "username for Active Directory LDAP bind")
+	adPass := fs.String("ad-pass", "", "password for Active Directory LDAP bind")
+	webhookURL := fs.String("webhook-url", def.WebhookURL, "webhook URL for SOAR/Slack/Teams/Discord/JSON notifications")
+	webhookLevel := fs.String("webhook-level", def.WebhookLevel, "minimum finding severity for instant alerts (critical, high, all)")
 	logLevel := fs.String("log-level", def.LogLevel, "log level: debug, info, warn or error")
 	logFormat := fs.String("log-format", def.LogFormat, "log format: text or json")
 
@@ -209,8 +219,37 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		return flagErrorExit(err)
 	}
 	specs := fs.Args()
+	impPath := *importFile
+	if impPath == "" {
+		impPath = *importNmap
+	}
+	if impPath != "" {
+		imported, err := target.ImportFile(impPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "rdpshot scan: import targets: %v\n", err)
+			return exitUsage
+		}
+		for _, ep := range imported {
+			specs = append(specs, ep.Key())
+		}
+	}
+	if *adServer != "" || *adDomain != "" {
+		adEndpoints, err := target.DiscoverLDAP(target.LDAPOptions{
+			Server:   *adServer,
+			Domain:   *adDomain,
+			Username: *adUser,
+			Password: *adPass,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "rdpshot scan: AD/LDAP discovery: %v\n", err)
+			return exitUsage
+		}
+		for _, ep := range adEndpoints {
+			specs = append(specs, ep.Key())
+		}
+	}
 	if len(specs) == 0 {
-		fmt.Fprintln(stderr, "rdpshot scan: at least one target specification is required")
+		fmt.Fprintln(stderr, "rdpshot scan: at least one target specification, --import-file, or --ad-server/--ad-domain is required")
 		fs.Usage()
 		return exitUsage
 	}
@@ -224,19 +263,22 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	// acknowledgement so the tool cannot be pointed at third-party hosts by
 	// accident.
 	mode := strings.ToLower(strings.TrimSpace(*authMode))
+	if *authCCache != "" && (mode == "" || mode == model.AuthModeWordlist) {
+		mode = model.AuthModeKerberos
+		*authMode = model.AuthModeKerberos
+	}
 	switch mode {
-	case "", model.AuthModeWordlist, model.AuthModeSingle, model.AuthModePTH:
+	case "", model.AuthModeWordlist, model.AuthModeSingle, model.AuthModePTH, model.AuthModeKerberos:
 		if mode == "" {
 			*authMode = model.AuthModeWordlist
 		}
 	default:
-		fmt.Fprintf(stderr, "rdpshot scan: invalid --auth-mode %q (want wordlist, single, or pth)\n", *authMode)
+		fmt.Fprintf(stderr, "rdpshot scan: invalid --auth-mode %q (want wordlist, single, pth, or kerberos)\n", *authMode)
 		return exitUsage
 	}
-	if mode == model.AuthModeSingle || mode == model.AuthModePTH {
+	if mode == model.AuthModeSingle || mode == model.AuthModePTH || mode == model.AuthModeKerberos {
 		*enableAuth = true
-		// Successful single/PTH login always captures a screenshot then disconnects.
-		*enableScreens = true
+		// Screenshots require --enable-screens explicitly; single/pth/kerberos do not force them.
 	}
 	if (*enableAuth || *enableScreens) && !*ackAuthorized {
 		fmt.Fprintln(stderr, "rdpshot scan: credential checks and screenshots require --ack-authorized to confirm you are authorized to test these targets")
@@ -252,6 +294,11 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		case model.AuthModePTH:
 			if strings.TrimSpace(*authUser) == "" || strings.TrimSpace(*authNTHash) == "" {
 				fmt.Fprintln(stderr, "rdpshot scan: --auth-mode=pth requires --auth-user and --auth-nthash")
+				return exitUsage
+			}
+		case model.AuthModeKerberos:
+			if strings.TrimSpace(*authCCache) == "" {
+				fmt.Fprintln(stderr, "rdpshot scan: --auth-mode=kerberos requires --auth-ccache")
 				return exitUsage
 			}
 		}
@@ -286,6 +333,10 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			cfg.LogLevel = *logLevel
 		case "log-format":
 			cfg.LogFormat = *logFormat
+		case "webhook-url":
+			cfg.WebhookURL = *webhookURL
+		case "webhook-level":
+			cfg.WebhookLevel = *webhookLevel
 		}
 	})
 	if err := cfg.Validate(); err != nil {
@@ -367,6 +418,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			EnableVuln:       *enableVuln,
 			EnableAuth:       *enableAuth,
 			EnableScreens:    *enableScreens,
+			EnableUDP:        *enableUDP,
 			MaxAuthFailures:  cfg.MaxAuthFailures,
 			UserWordlist:     cfg.UserWordlist,
 			PasswordWordlist: cfg.PasswordWordlist,
@@ -375,6 +427,13 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			AuthDomain:       *authDomain,
 			AuthPassword:     *authPassword,
 			AuthNTHash:       *authNTHash,
+			AuthCCache:       *authCCache,
+			WebhookURL:       *webhookURL,
+			WebhookLevel:     *webhookLevel,
+			ADServer:         *adServer,
+			ADDomain:         *adDomain,
+			ADUser:           *adUser,
+			ADPassword:       *adPass,
 			Acknowledged:     *ackAuthorized,
 		},
 	}
@@ -449,7 +508,6 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-
 // runServe starts the web UI and REST API.
 func runServe(args []string, stdout, stderr io.Writer) int {
 	def := config.Default()
@@ -468,6 +526,8 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	maxAuthFailures := fs.Int("max-auth-failures", def.MaxAuthFailures, "default max rejected logins per host (0 disables lockout protection)")
 	maxTargets := fs.Int("max-targets", def.MaxTargets, "max expanded endpoints per scan (0 = unlimited)")
 	maxConcurrentScans := fs.Int("max-concurrent-scans", def.MaxConcurrentScans, "maximum scans executing at once (others stay pending)")
+	webhookURL := fs.String("webhook-url", def.WebhookURL, "default webhook URL for scan alerts and completions")
+	webhookLevel := fs.String("webhook-level", def.WebhookLevel, "default webhook alert level (critical, high, all)")
 
 	if err := fs.Parse(args); err != nil {
 		return flagErrorExit(err)
@@ -506,6 +566,10 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 			cfg.MaxTargets = *maxTargets
 		case "max-concurrent-scans":
 			cfg.MaxConcurrentScans = *maxConcurrentScans
+		case "webhook-url":
+			cfg.WebhookURL = *webhookURL
+		case "webhook-level":
+			cfg.WebhookLevel = *webhookLevel
 		}
 	})
 	if err := cfg.Validate(); err != nil {
@@ -560,6 +624,8 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		PasswordWordlist:   cfg.PasswordWordlist,
 		MaxTargets:         cfg.MaxTargets,
 		MaxConcurrentScans: cfg.MaxConcurrentScans,
+		WebhookURL:         cfg.WebhookURL,
+		WebhookLevel:       cfg.WebhookLevel,
 	}, server.Dependencies{
 		Store:  st,
 		Hub:    hub,
@@ -608,6 +674,7 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		"Generate a report from stored scan results.", stderr)
 
 	scanID := fs.String("scan", "", "scan ID to render (required)")
+	compareID := fs.String("compare", "", "against scan ID for delta comparison (generates executive diff report)")
 	format := fs.String("format", "html", "report format: html, csv or pdf")
 	output := fs.String("output", "", "output file (default outputs/reports/rdpshot-<id>.<format>)")
 	fs.StringVar(output, "o", "", "shorthand for --output")
@@ -653,6 +720,34 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 	defer st.Close()
+
+	if *compareID != "" {
+		diff, err := st.DiffScans(*scanID, *compareID)
+		if err != nil {
+			fmt.Fprintf(stderr, "rdpshot report: diff scans: %v\n", err)
+			return exitError
+		}
+		path := *output
+		if path == "" {
+			path = filepath.Join(cfg.OutputsDir, "reports", fmt.Sprintf("rdpshot-compare-%s-vs-%s.pdf", *scanID, *compareID))
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			fmt.Fprintf(stderr, "rdpshot report: %v\n", err)
+			return exitError
+		}
+		f, err := os.Create(path)
+		if err != nil {
+			fmt.Fprintf(stderr, "rdpshot report: %v\n", err)
+			return exitError
+		}
+		defer f.Close()
+		if err := reporter.ComparePDF(f, diff, version); err != nil {
+			fmt.Fprintf(stderr, "rdpshot report: %v\n", err)
+			return exitError
+		}
+		fmt.Fprintln(stdout, path)
+		return exitOK
+	}
 
 	data, err := loadReportData(st, *scanID)
 	if err != nil {
@@ -764,13 +859,48 @@ func runTargets(args []string, stdout, stderr io.Writer) int {
 	portsSpec := fs.String("ports", "3389", "ports for specs without an explicit port, e.g. \"3389,3390,33800-33810\"")
 	blacklistSpec := fs.String("blacklist", "", "comma separated IPs, CIDRs or hostnames to exclude")
 	maxTargets := fs.Int("max-targets", def.MaxTargets, "max expanded endpoints (0 = unlimited)")
+	importFile := fs.String("import-file", "", "path to Nmap XML, Masscan JSON or list file to import targets from")
+	importNmap := fs.String("import-nmap", "", "alias for --import-file (import Nmap XML -oX output)")
+	adServer := fs.String("ad-server", "", "Active Directory domain controller host/IP for LDAP discovery")
+	adDomain := fs.String("ad-domain", "", "Active Directory domain name (e.g. corp.example.com)")
+	adUser := fs.String("ad-user", "", "username for Active Directory LDAP bind")
+	adPass := fs.String("ad-pass", "", "password for Active Directory LDAP bind")
 
 	if err := fs.Parse(args); err != nil {
 		return flagErrorExit(err)
 	}
 	specs := fs.Args()
+	impPath := *importFile
+	if impPath == "" {
+		impPath = *importNmap
+	}
+	if impPath != "" {
+		imported, err := target.ImportFile(impPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "rdpshot targets: import targets: %v\n", err)
+			return exitUsage
+		}
+		for _, ep := range imported {
+			specs = append(specs, ep.Key())
+		}
+	}
+	if *adServer != "" || *adDomain != "" {
+		adEndpoints, err := target.DiscoverLDAP(target.LDAPOptions{
+			Server:   *adServer,
+			Domain:   *adDomain,
+			Username: *adUser,
+			Password: *adPass,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "rdpshot targets: AD/LDAP discovery: %v\n", err)
+			return exitUsage
+		}
+		for _, ep := range adEndpoints {
+			specs = append(specs, ep.Key())
+		}
+	}
 	if len(specs) == 0 {
-		fmt.Fprintln(stderr, "rdpshot targets: at least one target specification is required")
+		fmt.Fprintln(stderr, "rdpshot targets: at least one target specification, --import-file, or --ad-server/--ad-domain is required")
 		fs.Usage()
 		return exitUsage
 	}

@@ -855,9 +855,9 @@ func (s *Store) ListAuthAttempts(scanID string) ([]model.AuthAttempt, error) {
 	var out []model.AuthAttempt
 	for rows.Next() {
 		var (
-			a          model.AuthAttempt
-			port       int
-			attempted  string
+			a         model.AuthAttempt
+			port      int
+			attempted string
 		)
 		if err := rows.Scan(&a.ID, &a.ScanID, &a.HostID, &a.Address, &port, &a.Username,
 			&a.Domain, &a.Outcome, &a.Detail, &attempted); err != nil {

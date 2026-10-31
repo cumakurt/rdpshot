@@ -16,17 +16,17 @@ var ErrNotFound = errors.New("store: not found")
 
 func findingFromRow(row rowScanner) (model.Finding, error) {
 	var (
-		f              model.Finding
-		port           int
-		severity       string
-		status         string
-		cve            sql.NullString
-		evidence       sql.NullString
-		remediation    sql.NullString
-		detectedAt     string
-		triageStatus   string
-		triageNote     string
-		triageUpdated  sql.NullString
+		f             model.Finding
+		port          int
+		severity      string
+		status        string
+		cve           sql.NullString
+		evidence      sql.NullString
+		remediation   sql.NullString
+		detectedAt    string
+		triageStatus  string
+		triageNote    string
+		triageUpdated sql.NullString
 	)
 	if err := row.Scan(&f.ID, &f.ScanID, &f.HostID, &f.Address, &port, &f.CheckID, &f.Title,
 		&severity, &status, &f.CVSS, &cve, &evidence, &remediation, &detectedAt,
@@ -49,6 +49,7 @@ func findingFromRow(row rowScanner) (model.Finding, error) {
 		t := parseTime(triageUpdated.String)
 		f.TriageUpdatedAt = &t
 	}
+	f.Compliance = model.LookupCompliance(f.CheckID)
 	return f, nil
 }
 
@@ -369,8 +370,8 @@ func (s *Store) UserCount() (int, error) {
 
 func scanUser(row rowScanner) (model.User, error) {
 	var (
-		u              model.User
-		role           string
+		u                model.User
+		role             string
 		created, updated string
 	)
 	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &role, &created, &updated)

@@ -53,8 +53,32 @@ web UI.
   is stored — the gallery only shows real frames. Optional `tesseract` OCR
   extracts Winlogon account tiles into `login_users`. Live desktop capture
   remains opt-in / post-login: FreeRDP when available, else pure-Go NLA bitmap
-  framebuffer, else a verified-login evidence card. Drawing Orders / RDPGFX are
-  not implemented in the Go path.
+  framebuffer with `[MS-RDPEGFX]` DVC channel support, else a verified-login evidence card.
+* **Compliance mapping** — findings mapped against **CIS Benchmarks**, **PCI-DSS 4.0**,
+  **NIST SP 800-53**, and **ISO 27001**, rendered in executive HTML, CSV, and PDF reports.
+* **Cryptographic & TLS posture** — proactive probe for TLS 1.0, 1.1, 1.2, 1.3
+  and legacy/weak cipher suites (RC4, 3DES/Sweet32, CBC).
+* **Nmap & Masscan import** — import RDP targets directly from Nmap XML (`-oX`)
+  or Masscan outputs via `--import-nmap` / `--import-file` and web UI upload.
+* **MFA & PAM heuristics** — passive detection of Duo Security, CyberArk PSM,
+  and Entra ID (Azure AD) pre-auth mechanisms (`mfa-enforced`, `pam-proxy-detected`).
+* **MS-RDPEUDP discovery** — UDP/3389 transport acceleration probing via `--enable-udp`.
+* **Pass-the-Ticket (Kerberos / CCache)** — inject external Kerberos credentials
+  cache (`.ccache`) via `--auth-ccache` without plaintext passwords or hashes.
+* **Executive delta comparison PDF** — one-pager comparison report between two audits
+  (`rdpshot report --compare <scan-id> --format pdf`).
+* **Dark / Light theme** — Command Center (Dark) and Corporate Clean (Light) themes
+  with persistent local storage state.
+* **RDP honeypot & deception detection** — anomalous handshake and response timing
+  signatures for identifying deception traps (`rdp-honeypot-detected`).
+* **RDP downgrade & MitM check** — detects servers accepting unauthenticated fallback
+  when NLA is omitted (`rdp-nla-downgrade-vulnerable`).
+* **Session shadowing posture** — audits unprompted admin shadowing policies
+  (`rdp-shadow-unprompted-exposed`).
+* **Corporate SOAR & Webhooks** — instant alert webhook notifications for Slack,
+  MS Teams, Discord, or generic JSON endpoints (`--webhook-url`, `--webhook-level`).
+* **Active Directory / LDAP auto-discovery** — queries domain controllers for Windows
+  servers and RDP SPNs (`--ad-server`, `--ad-domain`, `--ad-user`, `--ad-pass`).
 * **Hardening score** — 0–100 compliance score (NLA, TLS, cert, crypto, criticals).
 * **Executive one-pager** — HTML/PDF summary includes NLA coverage %, auth audit
   outcomes, and open finding counts; compare shows remediated burn-down and
@@ -71,7 +95,7 @@ web UI.
 * **Alert rules / SLA** — critical, high, NLA regression, credential-reuse, open-triage
   critical, and minimum hardening-score floor webhooks on scan finish.
 * **Path posture** — label scans `internal`/`external` for dual-homed compare.
-* **Framebuffer deepen** — Fast-Path updates plus PATBLT/SCRBLT/MEMBLT orders (best-effort).
+* **Framebuffer deepen** — Fast-Path updates plus PATBLT/SCRBLT/MEMBLT orders and MS-RDPEGFX surface decode.
 * **Kerberos offer** — CredSSP advertises Kerberos when a usable ccache/keytab is present.
 * **SIEM streaming** — JSON or CEF webhook on scan completion.
 * **Engagement packs** — evidence ZIP includes `manifest.json` with SHA-256 hashes.
@@ -82,8 +106,6 @@ web UI.
 * **Evidence pack v2** — ZIP export of HTML/CSV/PDF, hosts/findings/auth_attempts
   JSON, masked credentials, screenshots (no synthetic rdp-open), PACK_README, and
   SHA-256 `manifest.json`.
-* **Kerberos discovery** — when a usable ccache/keytab is present, CredSSP offers
-  Kerberos and records kind/source evidence (no ticket construction / no PIN UI).
 * **Trend / baseline** — posture time series across completed scans.
 * **Local users & audit log** — optional portal accounts with role-aware sessions.
 * **Named wordlist sets** and report branding metadata.
@@ -146,8 +168,10 @@ Exact first-run date/time picker plus interval or cron cadence.
 |---|---|
 | `cmd/rdpshot` | CLI entrypoint: `scan`, `serve`, `report`, `targets`, `version` |
 | `internal/about` | Product identity and developer credits shared by CLI, UI and reports |
+| `internal/alerts` | Finding and scan completion alert evaluator |
 | `internal/cronexpr` | Five-field cron parser for schedule cadence |
-| `internal/notify` | Outbound webhook notifications for scheduled scans |
+| `internal/notify` | Outbound SOAR webhook notifications (Slack, Teams, Discord, JSON) |
+| `internal/kerberos` | Kerberos CCache file parsing and pass-the-ticket injection |
 | `internal/model` | Shared domain types (Scan, Host, Finding, Credential, Screenshot, Event, ...) |
 | `internal/config` | Configuration resolution: defaults, JSON file, `RDSHOT_*` env, flags |
 | `internal/target` | Target spec parsing and expansion (IP, CIDR, hostname, `@file`, blacklist) |
@@ -255,6 +279,15 @@ rdpshot scan --ack-authorized --auth-mode=single \
 rdpshot scan --ack-authorized --auth-mode=pth \
   --auth-user bob --auth-nthash a4f49c406510bdcab6824ee7c30fd852 \
   10.0.0.10
+
+rdpshot scan --ack-authorized --auth-ccache /tmp/krb5cc_1000 \
+  10.0.0.10
+```
+
+Import targets from an existing Nmap XML discovery run:
+
+```sh
+rdpshot scan --import-nmap /path/to/scan.xml --enable-vuln
 ```
 
 On a successful single/PTH login the tool captures a screenshot and
@@ -262,13 +295,16 @@ On a successful single/PTH login the tool captures a screenshot and
 
 `--auth-domain` sets the default domain for wordlist, single, and PTH modes.
 Wordlist lines may still embed `DOMAIN\user` or `user@domain` (those win).
-`--auth-nthash` accepts a 32-character hex NT hash or an `LM:NT` pair. PTH
-session screenshots use the Go framebuffer path only (FreeRDP is skipped).
+`--auth-nthash` accepts a 32-character hex NT hash or an `LM:NT` pair.
 
-Generate a PDF report for a finished scan:
+Generate a PDF report or an Executive Delta Comparison PDF:
 
 ```sh
+# Management report for one scan
 rdpshot report --scan <scan-id> --format pdf
+
+# Executive one-pager comparing two scans (burn-down & remediation)
+rdpshot report --scan <new-scan-id> --compare <old-scan-id> --format pdf
 ```
 
 ## CLI reference
@@ -283,11 +319,11 @@ Flags must come before the target specifications. Targets are one or more of:
 
 | Command | Purpose | Key flags |
 |---|---|---|
-| `scan` | Run a scan in the foreground | `--name`, `--ports` (default `3389`), `--blacklist`, `--concurrency`, `--rate`, `--timeout`, `--max-targets`, `--max-auth-failures`, `--enable-vuln` (default on), `--enable-auth`, `--enable-screens`, `--ack-authorized`, `--user-wordlist`, `--password-wordlist`, `--auth-mode wordlist\|single\|pth`, `--auth-user`, `--auth-domain` (all modes), `--auth-password`, `--auth-nthash`, `--report none\|html\|csv\|pdf`, `--report-dir`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format` |
-| `serve` | Start the web UI and REST API | `--addr` (default `127.0.0.1:8722`), `--token`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format`, `--user-wordlist`, `--password-wordlist`, `--max-auth-failures`, `--max-targets`, `--max-concurrent-scans` (default `2`) |
-| `report` | Render a stored scan into a report | `--scan <id>` (required), `--format html\|csv\|pdf`, `-o/--output`, `--db` |
+| `scan` | Run a scan in the foreground | `--name`, `--ports` (default `3389`), `--blacklist`, `--concurrency`, `--rate`, `--timeout`, `--max-targets`, `--max-auth-failures`, `--enable-vuln` (default on), `--enable-auth`, `--enable-screens`, `--enable-udp`, `--ack-authorized`, `--user-wordlist`, `--password-wordlist`, `--auth-mode wordlist\|single\|pth`, `--auth-user`, `--auth-domain` (all modes), `--auth-password`, `--auth-nthash`, `--auth-ccache`, `--ad-server`, `--ad-domain`, `--ad-user`, `--ad-pass`, `--import-file/--import-nmap`, `--webhook-url`, `--webhook-level`, `--report none\|html\|csv\|pdf`, `--report-dir`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format` |
+| `serve` | Start the web UI and REST API | `--addr` (default `127.0.0.1:8722`), `--token`, `--db`, `--outputs`, `--config`, `--log-level`, `--log-format`, `--user-wordlist`, `--password-wordlist`, `--max-auth-failures`, `--max-targets`, `--max-concurrent-scans` (default `2`), `--webhook-url`, `--webhook-level` |
+| `report` | Render a stored scan into a report | `--scan <id>` (required), `--format html\|csv\|pdf`, `--compare <against-id>` (Executive Delta diff PDF), `-o/--output`, `--db` |
 | `policy check` | CI gate against a stored scan | `--scan <id>` (required), `--db`, `--policy path.json` (optional) |
-| `targets` | Resolve targets and print `address:port` lines | `--ports`, `--blacklist`, `--max-targets` |
+| `targets` | Resolve targets and print `address:port` lines | `--ports`, `--blacklist`, `--max-targets`, `--import-file/--import-nmap`, `--ad-server`, `--ad-domain`, `--ad-user`, `--ad-pass` |
 | `version` | Print `rdpshot <version>` | — |
 
 Progress and diagnostics go to stderr; results go to stdout. Exit codes:
@@ -375,6 +411,7 @@ footer shows the build version and developer attribution.
 | `GET` | `/api/v1/scans/{id}/credentials` | Verified credentials (masked) |
 | `GET` | `/api/v1/scans/{id}/report?format=html\|csv\|pdf` | Download a report for one scan |
 | `GET` | `/api/v1/reports/export?format=html\|csv\|pdf&scan={id}\|all` | Download a report for one scan or all scans (embeds screenshots) |
+| `GET` | `/api/v1/reports/compare-pdf?base={id}&against={id}` | Download comparative executive summary diff PDF |
 | `GET` | `/api/v1/schedules` | List recurring schedules |
 | `POST` | `/api/v1/schedules` | Create a schedule (`run_at` datetime, interval/cron) |
 | `GET` | `/api/v1/schedules/{id}` | Schedule detail |
@@ -423,12 +460,21 @@ footer shows the build version and developer attribution.
 | `bluekeep-cve-2019-0708` | CVE-2019-0708 | critical | Confirmed MCS Disconnect Provider Ultimatum after safe `MS_T120` probe |
 | `weak-encryption` | — | high | Encryption level `none/low` or exclusively 40/56-bit RC4 methods |
 | `weak-tls` | — | medium | TLS 1.0/1.1/SSL3 or weak cipher (RC4/3DES/NULL) |
+| `tls-legacy-1.0-1.1` | — | medium | Probed server accepts obsolete TLS 1.0 / 1.1 protocols |
+| `tls-weak-cipher` | — | medium | Probed server offers weak or legacy cipher suites (RC4/3DES/CBC) |
 | `self-signed-cert` | — | medium | Self-signed certificate chain |
 | `expired-cert` | — | medium | Certificate `NotAfter` in the past |
 | `rdp-negotiation-failure` | — | low | Server returned `RDP_NEG_FAILURE` |
 | `cert-hostname-mismatch` | — | medium | DNS SANs present and do not match scanned hostname |
 | `rd-web-exposed` / `rd-gateway-exposed` | — | info | Confirmed discovery markers |
 | `udp-3389-open` | — | low | UDP/3389 returned a response payload |
+| `nla-smartcard-required` | — | info | Smartcard required for NLA |
+| `nla-kerberos-offered` | — | info | CredSSP advertises Kerberos support |
+| `mfa-enforced` | — | info | Multi-Factor Authentication (Duo / Azure AD) detected |
+| `pam-proxy-detected` | — | info | Privileged Access Management (CyberArk PSM) proxy detected |
+| `rdp-honeypot-detected` | — | high | Handshake timing and anomalies match honeypot signatures |
+| `rdp-nla-downgrade-vulnerable` | — | high | Server permits non-NLA session fallback when NLA omitted |
+| `rdp-shadow-unprompted-exposed` | — | high | Shadowing capability permits session takeover without user consent |
 
 ## Limitations
 

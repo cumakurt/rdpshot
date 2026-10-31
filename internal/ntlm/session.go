@@ -37,13 +37,13 @@ var (
 //
 // The RC4 handle is persistent per direction: peers must seal/unseal in lockstep.
 type SessionSecurity struct {
-	sendSignKey      []byte
-	recvSignKey      []byte
-	sendSeal         *rc4
-	recvSeal         *rc4
-	sendSeq          uint32
-	recvSeq          uint32
-	encryptChecksum  bool
+	sendSignKey     []byte
+	recvSignKey     []byte
+	sendSeal        *rc4
+	recvSeal        *rc4
+	sendSeq         uint32
+	recvSeq         uint32
+	encryptChecksum bool
 }
 
 // NewSessionSecurity derives the per-direction signing and sealing keys from

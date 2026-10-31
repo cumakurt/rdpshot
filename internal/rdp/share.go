@@ -16,21 +16,21 @@ const (
 	pduTypeMask    uint16 = 0xF
 	pduVersion1    uint16 = 0x10
 
-	pduType2Update    byte = 0x02
-	pduType2Control   byte = 0x14
-	pduType2Pointer   byte = 0x1B
-	pduType2Sync      byte = 0x1F
-	pduType2FontList  byte = 0x27
-	pduType2FontMap   byte = 0x28
-	pduType2SetError  byte = 0x2F
-	pduType2SaveInfo  byte = 0x26
+	pduType2Update   byte = 0x02
+	pduType2Control  byte = 0x14
+	pduType2Pointer  byte = 0x1B
+	pduType2Sync     byte = 0x1F
+	pduType2FontList byte = 0x27
+	pduType2FontMap  byte = 0x28
+	pduType2SetError byte = 0x2F
+	pduType2SaveInfo byte = 0x26
 
 	updateTypeOrders  uint16 = 0
 	updateTypeBitmap  uint16 = 1
 	updateTypePalette uint16 = 2
 	updateTypeSync    uint16 = 3
 
-	ctrlActionCooperate    uint16 = 0x0004
+	ctrlActionCooperate      uint16 = 0x0004
 	ctrlActionRequestControl uint16 = 0x0001
 )
 
@@ -61,10 +61,10 @@ func buildShareDataPDU(shareID uint32, source uint16, pduType2 byte, payload []b
 	total := uint16(6 + uncompressed)
 	out := shareControlHeader(total, pduTypeData, source)
 	out = binary.LittleEndian.AppendUint32(out, shareID)
-	out = append(out, 0x00)       // pad1
-	out = append(out, 0x01)       // streamID = STREAM_LOW
+	out = append(out, 0x00) // pad1
+	out = append(out, 0x01) // streamID = STREAM_LOW
 	out = binary.LittleEndian.AppendUint16(out, uncompressed)
-	out = append(out, pduType2, 0x00) // compressedType
+	out = append(out, pduType2, 0x00)              // compressedType
 	out = binary.LittleEndian.AppendUint16(out, 0) // compressedLength
 	return append(out, payload...)
 }

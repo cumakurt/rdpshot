@@ -251,7 +251,7 @@
 
   function syncThemeToggles() {
     var dark = isDarkTheme();
-    var label = dark ? 'Switch to light theme' : 'Switch to dark theme';
+    var label = dark ? 'Switch to Corporate Clean (Light)' : 'Switch to Command Center (Dark)';
     var toggles = document.querySelectorAll('[data-theme-toggle]');
     Array.prototype.forEach.call(toggles, function (button) {
       button.setAttribute('aria-pressed', dark ? 'true' : 'false');
@@ -263,6 +263,7 @@
   function applyTheme(theme, persist) {
     var dark = theme === 'dark';
     document.documentElement.classList.toggle('dark', dark);
+    document.documentElement.setAttribute('data-theme', dark ? 'command-center' : 'corporate-clean');
     if (persist) {
       try {
         window.localStorage.setItem(THEME_STORAGE_KEY, dark ? 'dark' : 'light');
@@ -1864,11 +1865,13 @@
       if (key === 'wordlist') {
         show = mode === 'wordlist';
       } else if (key === 'cred') {
-        show = mode === 'single' || mode === 'pth';
+        show = mode === 'single' || mode === 'pth' || mode === 'kerberos';
       } else if (key === 'single') {
         show = mode === 'single';
       } else if (key === 'pth') {
         show = mode === 'pth';
+      } else if (key === 'kerberos') {
+        show = mode === 'kerberos';
       }
       panel.hidden = !show;
       panel.classList.toggle('hidden', !show);
@@ -1877,9 +1880,10 @@
       var panel = field.closest('[data-auth-panel]');
       var panelKey = panel ? panel.getAttribute('data-auth-panel') : '';
       var active = authEnabled && (
-        (panelKey === 'cred' && (mode === 'single' || mode === 'pth')) ||
+        (panelKey === 'cred' && (mode === 'single' || mode === 'pth' || mode === 'kerberos')) ||
         (panelKey === 'single' && mode === 'single') ||
-        (panelKey === 'pth' && mode === 'pth')
+        (panelKey === 'pth' && mode === 'pth') ||
+        (panelKey === 'kerberos' && mode === 'kerberos')
       );
       field.disabled = !active;
     });
@@ -1898,7 +1902,7 @@
       syncAuthAdvanced(root);
       Array.prototype.forEach.call(root.querySelectorAll('[data-auth-mode]'), function (radio) {
         radio.addEventListener('change', function () {
-          if (radio.value === 'single' || radio.value === 'pth') {
+          if (radio.value === 'single' || radio.value === 'pth' || radio.value === 'kerberos') {
             var form = root.closest('form');
             var enableAuth = form && form.querySelector('[data-enable-auth]');
             if (enableAuth && !enableAuth.checked) {

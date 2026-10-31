@@ -25,4 +25,9 @@
 - Pin TLS 1.2 (`MaxVersion` too): TLS 1.3 CredSSP often stalls after AUTHENTICATE/pubKeyAuth.
 - FreeRDP `/from-stdin` under xvfb: empty domain must become `/d:.` (set-but-empty env breaks `:-` defaults); read password then `printf '%s\n' | xfreerdp` (background `&` drops stdin; `$(cat)` strips the newline). Reject blank captures; settle ≥6s after the window maps; retry once on blank. When FreeRDP tooling exists, do not store the evidence card as a “screenshot” — return an error instead.
 - `rdpshot serve` often runs from `/usr/local/rdpshot` as root; source fixes are invisible until `sudo ./install.sh --force` and a serve restart.
+- When NLA is enforced, omit `nla-not-required` entirely (do not emit high/`not_vulnerable`); CLI “finding high …” lines were misread as open vulns.
+- Go `flag` requires flags before positional targets (`rdpshot scan -ports 3389 host`, not `scan host -ports`).
+- Prefer `PROTOCOL_HYBRID` (not HYBRID_EX) for Go framebuffer Capture; HYBRID_EX needs Early User Auth Result bytes and still RST’d MCS Connect-Initial on the lab host after CredSSP.
+- PTH live screenshots use FreeRDP `/pth` (restricted admin), not `/from-stdin`. On some hosts Restricted Admin paints a black desktop — reject blank frames; do not write evidence-card placeholders when FreeRDP tooling is present.
+- API create scan fields use `auth_username` (not `auth_user`) and live under `/api/v1/scans`.
 - Aggressive lab CredSSP probing can knock a fragile VM offline (`no route to host`); gate live tests behind `RDPSHOT_LIVE=1`.

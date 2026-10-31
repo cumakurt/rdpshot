@@ -18,6 +18,7 @@ import (
 	"rdpshot/internal/reporter"
 	"rdpshot/internal/score"
 	"rdpshot/internal/screenshot"
+	"rdpshot/internal/store"
 	"rdpshot/internal/target"
 )
 
@@ -49,6 +50,25 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	specs := mergeTargetSpecs(splitTargets(form.Get("targets")), fromFile)
+	adServer := strings.TrimSpace(form.Get("ad_server"))
+	adDomain := strings.TrimSpace(form.Get("ad_domain"))
+	adUser := strings.TrimSpace(form.Get("ad_user"))
+	adPass := form.Get("ad_password")
+	if adServer != "" || adDomain != "" {
+		adEndpoints, err := target.DiscoverLDAP(target.LDAPOptions{
+			Server:   adServer,
+			Domain:   adDomain,
+			Username: adUser,
+			Password: adPass,
+		})
+		if err != nil {
+			s.writeAPIError(w, http.StatusBadRequest, "AD/LDAP discovery: "+err.Error())
+			return
+		}
+		for _, ep := range adEndpoints {
+			specs = append(specs, ep.Key())
+		}
+	}
 	if len(specs) == 0 {
 		s.writeAPIError(w, http.StatusBadRequest, "targets is required")
 		return
@@ -66,6 +86,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	enableAuth := formBool(form.Get("enable_auth"))
 	enableScreens := formBool(form.Get("enable_screens"))
 	enableDiscovery := formBool(form.Get("enable_discovery"))
+	enableUDP := formBool(form.Get("enable_udp"))
 	ack := formBool(form.Get("ack_authorized"))
 	if (enableAuth || enableScreens) && !ack {
 		s.writeAPIError(w, http.StatusBadRequest,
@@ -190,14 +211,25 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 			EnableAuth:       enableAuth,
 			EnableScreens:    enableScreens,
 			EnableDiscovery:  enableDiscovery,
+			EnableUDP:        enableUDP,
 			MaxAuthFailures:  maxAuthFailures,
 			UserWordlist:     userWordlist,
 			PasswordWordlist: passwordWordlist,
 			BaseScanID:       baseScanID,
 			Path:             pathLabel,
 			MaxRuntimeSec:    maxRuntimeSec,
+			WebhookURL:       strings.TrimSpace(form.Get("webhook_url")),
+			WebhookLevel:     strings.TrimSpace(form.Get("webhook_level")),
+			ADServer:         adServer,
+			ADDomain:         adDomain,
+			ADUser:           adUser,
+			ADPassword:       adPass,
 			Acknowledged:     ack,
 		},
+	}
+	if scan.Options.WebhookURL == "" && s.cfg.WebhookURL != "" {
+		scan.Options.WebhookURL = s.cfg.WebhookURL
+		scan.Options.WebhookLevel = s.cfg.WebhookLevel
 	}
 	if err := applyAuthOptions(&scan.Options, form.Get); err != nil {
 		s.writeAPIError(w, http.StatusBadRequest, err.Error())
@@ -794,6 +826,45 @@ func (s *Server) handleScanReport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleComparePDF generates an executive delta comparison PDF report between two scans.
+func (s *Server) handleComparePDF(w http.ResponseWriter, r *http.Request) {
+	baseID := strings.TrimSpace(r.URL.Query().Get("base"))
+	againstID := strings.TrimSpace(r.URL.Query().Get("against"))
+	if baseID == "" || againstID == "" {
+		s.writeAPIError(w, http.StatusBadRequest, "both base and against scan IDs are required (?base=<id>&against=<id>)")
+		return
+	}
+	if baseID == againstID {
+		s.writeAPIError(w, http.StatusBadRequest, "base and against must be different scan IDs")
+		return
+	}
+
+	diff, err := s.deps.Store.DiffScans(baseID, againstID)
+	if err != nil {
+		if errors.Is(err, store.ErrScanNotFound) {
+			s.writeAPIError(w, http.StatusNotFound, "one or both scans not found")
+			return
+		}
+		s.internalError(w, r, "compare scans", err)
+		return
+	}
+
+	var buf bytes.Buffer
+	if err := reporter.ComparePDF(&buf, diff, s.cfg.ToolVersion); err != nil {
+		s.internalError(w, r, "generate compare pdf", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/pdf")
+	filename := fmt.Sprintf("rdpshot-compare-%s-vs-%s.pdf", baseID, againstID)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.deps.Logger.Error("write compare pdf", "error", err.Error())
+	}
+}
+
 // reportData assembles the self-contained report payload. Credentials are
 // masked; screenshot FilePath values stay on-disk so HTML/PDF can embed bytes.
 func (s *Server) reportData(scan model.Scan) (reporter.Data, error) {
@@ -830,11 +901,11 @@ func (s *Server) reportData(scan model.Scan) (reporter.Data, error) {
 	}
 	sc := score.EvaluateScan(scan.ID, hosts, findings)
 	return reporter.Data{
-		Scan:           scan,
-		Summary:        summary,
-		Hosts:          hosts,
-		Findings:       findings,
-		Credentials:    maskCredentials(creds),
+		Scan:        scan,
+		Summary:     summary,
+		Hosts:       hosts,
+		Findings:    findings,
+		Credentials: maskCredentials(creds),
 		// Keep on-disk paths so HTML/PDF can embed image bytes.
 		Screens:        reportScreenshotFiles(screens),
 		CVEStats:       cveStats,

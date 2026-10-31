@@ -415,3 +415,57 @@ func TestGrabOpenHostWritesPNG(t *testing.T) {
 		t.Fatalf("evidence image too small: %d", info.Size())
 	}
 }
+
+type mockPriorityGrabber struct {
+	available bool
+	shot      model.Screenshot
+	err       error
+	called    bool
+}
+
+func (s *mockPriorityGrabber) Available() error {
+	if s.available {
+		return nil
+	}
+	return ErrGrabberUnavailable
+}
+
+func (s *mockPriorityGrabber) Grab(ctx context.Context, ep model.Endpoint, cred model.Credential) (model.Screenshot, error) {
+	s.called = true
+	return s.shot, s.err
+}
+
+func TestAutoGrabberPreferGoFramebuffer(t *testing.T) {
+	primary := &mockPriorityGrabber{
+		available: true,
+		shot:      model.Screenshot{FilePath: "/tmp/primary.png"},
+	}
+	secondary := &mockPriorityGrabber{
+		available: true,
+		shot:      model.Screenshot{FilePath: "/tmp/secondary.png"},
+	}
+
+	ag := &AutoGrabber{
+		Primary:             primary,
+		Secondary:           secondary,
+		PreferGoFramebuffer: true,
+		Logger:              nil,
+	}
+
+	ep := model.Endpoint{Address: "10.0.0.1", Port: 3389}
+	cred := model.Credential{Username: "user", Secret: "pass"}
+
+	shot, err := ag.Grab(context.Background(), ep, cred)
+	if err != nil {
+		t.Fatalf("grab: %v", err)
+	}
+	if !secondary.called {
+		t.Errorf("secondary (Go framebuffer) should have been called when PreferGoFramebuffer=true")
+	}
+	if primary.called {
+		t.Errorf("primary should NOT have been called when secondary succeeded")
+	}
+	if shot.FilePath != "/tmp/secondary.png" {
+		t.Errorf("shot.FilePath = %q, want /tmp/secondary.png", shot.FilePath)
+	}
+}

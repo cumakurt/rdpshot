@@ -83,6 +83,6 @@ type wordlistPathError string
 func (e wordlistPathError) Error() string { return string(e) }
 
 const (
-	errWordlistPathTooLong  wordlistPathError = "path is too long"
-	errWordlistPathInvalid  wordlistPathError = "path is invalid"
+	errWordlistPathTooLong wordlistPathError = "path is too long"
+	errWordlistPathInvalid wordlistPathError = "path is invalid"
 )

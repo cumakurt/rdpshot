@@ -107,21 +107,22 @@ func (e Endpoint) Key() string {
 
 // ScanOptions captures the parameters a scan was started with.
 type ScanOptions struct {
-	Targets          []string `json:"targets"`
-	Ports            []uint16 `json:"ports"`
-	Blacklist        []string `json:"blacklist,omitempty"`
-	TimeoutMS        int      `json:"timeout_ms"`
-	Concurrency      int      `json:"concurrency"`
-	RatePerSecond    float64  `json:"rate_per_second"`
-	EnableVuln       bool     `json:"enable_vuln"`
-	EnableAuth       bool     `json:"enable_auth"`
-	EnableScreens    bool     `json:"enable_screens"`
-	EnableDiscovery  bool     `json:"enable_discovery"`
+	Targets         []string `json:"targets"`
+	Ports           []uint16 `json:"ports"`
+	Blacklist       []string `json:"blacklist,omitempty"`
+	TimeoutMS       int      `json:"timeout_ms"`
+	Concurrency     int      `json:"concurrency"`
+	RatePerSecond   float64  `json:"rate_per_second"`
+	EnableVuln      bool     `json:"enable_vuln"`
+	EnableAuth      bool     `json:"enable_auth"`
+	EnableScreens   bool     `json:"enable_screens"`
+	EnableDiscovery bool     `json:"enable_discovery"`
+	EnableUDP       bool     `json:"enable_udp"`
 	// MaxAuthFailures caps rejected logins per host (lockout fail-safe).
 	// The product default is 5; 0 disables the limit for aggressive audits.
-	MaxAuthFailures int `json:"max_auth_failures"`
-	UserWordlist     string   `json:"user_wordlist,omitempty"`
-	PasswordWordlist string   `json:"password_wordlist,omitempty"`
+	MaxAuthFailures  int    `json:"max_auth_failures"`
+	UserWordlist     string `json:"user_wordlist,omitempty"`
+	PasswordWordlist string `json:"password_wordlist,omitempty"`
 	// AuthMode selects how credentials are supplied for auth checks:
 	// wordlist (default), single, or pth (pass-the-hash).
 	AuthMode string `json:"auth_mode,omitempty"`
@@ -134,6 +135,8 @@ type ScanOptions struct {
 	AuthPassword string `json:"auth_password,omitempty"`
 	// AuthNTHash is the NT hash (hex or LM:NT) for AuthMode=pth (redacted on API read).
 	AuthNTHash string `json:"auth_nthash,omitempty"`
+	// AuthCCache is the path to a Kerberos credentials cache for pass-the-ticket.
+	AuthCCache string `json:"auth_ccache,omitempty"`
 	// BaseScanID when set restricts the run to a delta against a prior scan
 	// (new/changed hosts and hosts with open triage findings).
 	BaseScanID string `json:"base_scan_id,omitempty"`
@@ -141,6 +144,15 @@ type ScanOptions struct {
 	Path string `json:"path,omitempty"`
 	// MaxRuntimeSec when > 0 cancels the scan after that many seconds.
 	MaxRuntimeSec int `json:"max_runtime_sec,omitempty"`
+	// WebhookURL is an outbound SOAR/Slack/Teams/Discord/generic endpoint.
+	WebhookURL string `json:"webhook_url,omitempty"`
+	// WebhookLevel filters instant alerts: critical, high, or all.
+	WebhookLevel string `json:"webhook_level,omitempty"`
+	// Active Directory / LDAP auto-discovery settings.
+	ADServer   string `json:"ad_server,omitempty"`
+	ADDomain   string `json:"ad_domain,omitempty"`
+	ADUser     string `json:"ad_user,omitempty"`
+	ADPassword string `json:"ad_password,omitempty"`
 	// Acknowledged records that the operator confirmed authorization for the
 	// intrusive checks (auth attempts and screenshot capture).
 	Acknowledged bool `json:"acknowledged"`
@@ -151,27 +163,32 @@ const (
 	AuthModeWordlist = "wordlist"
 	AuthModeSingle   = "single"
 	AuthModePTH      = "pth"
+	AuthModeKerberos = "kerberos"
 )
 
 // Credential method markers used while candidates are in flight.
 const (
 	CredMethodPassword = "password"
 	CredMethodNTHash   = "nthash"
+	CredMethodKerberos = "kerberos"
 )
 
 // RedactAuthSecrets returns a copy of options with password/hash fields cleared.
 func (o ScanOptions) RedactAuthSecrets() ScanOptions {
 	o.AuthPassword = ""
 	o.AuthNTHash = ""
+	o.AuthCCache = ""
+	o.ADPassword = ""
 	return o
 }
 
 // AuthModeImpliesScreenshot reports whether a successful credential check in
-// this auth mode must capture a screenshot and disconnect immediately
-// (single credential and pass-the-hash).
+// this auth mode is expected to capture a screenshot and disconnect when
+// EnableScreens is also set (single credential, pass-the-hash, or kerberos pass-the-ticket).
+// It does not force screenshots by itself.
 func (o ScanOptions) AuthModeImpliesScreenshot() bool {
 	mode := strings.ToLower(strings.TrimSpace(o.AuthMode))
-	return mode == AuthModeSingle || mode == AuthModePTH
+	return mode == AuthModeSingle || mode == AuthModePTH || mode == AuthModeKerberos
 }
 
 // Progress tracks live scan counters.
@@ -225,11 +242,13 @@ type ServiceInfo struct {
 	NegotiationFailureCode *uint32 `json:"negotiation_failure_code,omitempty"`
 	NLARequired            bool    `json:"nla_required"`
 	// Encryption describes the standard RDP security layer when negotiated.
-	EncryptionLevel   string           `json:"encryption_level,omitempty"`
-	EncryptionMethods uint32           `json:"encryption_methods,omitempty"`
-	TLSVersion        string           `json:"tls_version,omitempty"`
-	TLSCipherSuite    string           `json:"tls_cipher_suite,omitempty"`
-	Certificate       *CertificateInfo `json:"certificate,omitempty"`
+	EncryptionLevel      string           `json:"encryption_level,omitempty"`
+	EncryptionMethods    uint32           `json:"encryption_methods,omitempty"`
+	TLSVersion           string           `json:"tls_version,omitempty"`
+	TLSCipherSuite       string           `json:"tls_cipher_suite,omitempty"`
+	SupportedTLSVersions []string         `json:"supported_tls_versions,omitempty"`
+	WeakCiphers          []string         `json:"weak_ciphers,omitempty"`
+	Certificate          *CertificateInfo `json:"certificate,omitempty"`
 	// ServerVersion is the MCS server core version when available.
 	ServerVersion uint32 `json:"server_version,omitempty"`
 	// MCSChannelIDs lists the static virtual channel IDs offered by the server.
@@ -239,15 +258,30 @@ type ServiceInfo struct {
 	// Evidence holds protocol-level details for reporting.
 	Evidence map[string]string `json:"evidence,omitempty"`
 	// Alternate exposure paths discovered by optional probes.
-	RDWeb          bool   `json:"rd_web,omitempty"`
-	RDWebURL       string `json:"rd_web_url,omitempty"`
-	RDGateway      bool   `json:"rd_gateway,omitempty"`
-	RDGatewayAuth  string `json:"rd_gateway_auth,omitempty"`
-	UDP3389        bool   `json:"udp_3389,omitempty"`
+	RDWeb              bool   `json:"rd_web,omitempty"`
+	RDWebURL           string `json:"rd_web_url,omitempty"`
+	RDGateway          bool   `json:"rd_gateway,omitempty"`
+	RDGatewayAuth      string `json:"rd_gateway_auth,omitempty"`
+	UDP3389            bool   `json:"udp_3389,omitempty"`
+	UDPRDPAcceleration bool   `json:"udp_rdp_acceleration,omitempty"`
+	UDPEvidence        string `json:"udp_evidence,omitempty"`
 	// KerberosOffered is set when the client advertised Kerberos during NLA.
 	KerberosOffered bool `json:"kerberos_offered,omitempty"`
 	// SmartCardRequired is set when CredSSP/NLA indicates smart-card logon.
 	SmartCardRequired bool `json:"smart_card_required,omitempty"`
+	// MFAEnforced / PAMProxy indicate positive MFA and PAM access layers.
+	MFAEnforced     bool   `json:"mfa_enforced,omitempty"`
+	PAMProxy        bool   `json:"pam_proxy,omitempty"`
+	SecurityGateway string `json:"security_gateway,omitempty"`
+	// HoneypotDetected / HoneypotReason indicate a detected deception or decoy system.
+	HoneypotDetected bool   `json:"honeypot_detected,omitempty"`
+	HoneypotReason   string `json:"honeypot_reason,omitempty"`
+	// NLADowngradeVulnerable is set when the server permits omitting NLA flags (MitM/PyRDP susceptible).
+	NLADowngradeVulnerable bool   `json:"nla_downgrade_vulnerable,omitempty"`
+	NLADowngradeEvidence   string `json:"nla_downgrade_evidence,omitempty"`
+	// ShadowPolicy / ShadowUnprompted record session shadowing remote control posture.
+	ShadowPolicy     string `json:"shadow_policy,omitempty"`
+	ShadowUnprompted bool   `json:"shadow_unprompted,omitempty"`
 	// LoginUsers are account tiles observed on the pre-auth Winlogon UI
 	// (OCR from a TLS login-screen capture). Best-effort; may be empty.
 	LoginUsers []string `json:"login_users,omitempty"`
@@ -313,23 +347,24 @@ func (t TriageStatus) Valid() bool {
 
 // Finding is one check outcome attached to a host.
 type Finding struct {
-	ID              int64         `json:"id"`
-	ScanID          string        `json:"scan_id"`
-	HostID          int64         `json:"host_id"`
-	Address         string        `json:"address"`
-	Port            uint16        `json:"port"`
-	CheckID         string        `json:"check_id"`
-	Title           string        `json:"title"`
-	Severity        Severity      `json:"severity"`
-	Status          FindingStatus `json:"status"`
-	CVE             string        `json:"cve,omitempty"`
-	CVSS            float64       `json:"cvss,omitempty"`
-	Evidence        string        `json:"evidence,omitempty"`
-	Remediation     string        `json:"remediation,omitempty"`
-	DetectedAt      time.Time     `json:"detected_at"`
-	TriageStatus    TriageStatus  `json:"triage_status"`
-	TriageNote      string        `json:"triage_note,omitempty"`
-	TriageUpdatedAt *time.Time    `json:"triage_updated_at,omitempty"`
+	ID              int64           `json:"id"`
+	ScanID          string          `json:"scan_id"`
+	HostID          int64           `json:"host_id"`
+	Address         string          `json:"address"`
+	Port            uint16          `json:"port"`
+	CheckID         string          `json:"check_id"`
+	Title           string          `json:"title"`
+	Severity        Severity        `json:"severity"`
+	Status          FindingStatus   `json:"status"`
+	CVE             string          `json:"cve,omitempty"`
+	CVSS            float64         `json:"cvss,omitempty"`
+	Evidence        string          `json:"evidence,omitempty"`
+	Remediation     string          `json:"remediation,omitempty"`
+	Compliance      []ComplianceRef `json:"compliance,omitempty"`
+	DetectedAt      time.Time       `json:"detected_at"`
+	TriageStatus    TriageStatus    `json:"triage_status"`
+	TriageNote      string          `json:"triage_note,omitempty"`
+	TriageUpdatedAt *time.Time      `json:"triage_updated_at,omitempty"`
 }
 
 // Credential is a verified or attempted login record.
@@ -555,13 +590,13 @@ type User struct {
 
 // AuditEntry records one privileged or mutating action.
 type AuditEntry struct {
-	ID        int64     `json:"id"`
-	At        time.Time `json:"at"`
-	Actor     string    `json:"actor"`
-	Action    string    `json:"action"`
-	Target    string    `json:"target,omitempty"`
-	Detail    string    `json:"detail,omitempty"`
-	RemoteIP  string    `json:"remote_ip,omitempty"`
+	ID       int64     `json:"id"`
+	At       time.Time `json:"at"`
+	Actor    string    `json:"actor"`
+	Action   string    `json:"action"`
+	Target   string    `json:"target,omitempty"`
+	Detail   string    `json:"detail,omitempty"`
+	RemoteIP string    `json:"remote_ip,omitempty"`
 }
 
 // ReportBranding customizes generated reports.
@@ -586,11 +621,11 @@ type HostNote struct {
 
 // AlertRules configures outbound alerts evaluated when a scan finishes.
 type AlertRules struct {
-	WebhookURL      string `json:"webhook_url,omitempty"`
-	OnCritical      bool   `json:"on_critical"`
-	OnHigh          bool   `json:"on_high"`
-	OnNLARegressed  bool   `json:"on_nla_regressed"`
-	OnCredReuseMin  int    `json:"on_cred_reuse_min"`
+	WebhookURL     string `json:"webhook_url,omitempty"`
+	OnCritical     bool   `json:"on_critical"`
+	OnHigh         bool   `json:"on_high"`
+	OnNLARegressed bool   `json:"on_nla_regressed"`
+	OnCredReuseMin int    `json:"on_cred_reuse_min"`
 	// MinHardeningScore fires when the scan score is strictly below this value.
 	// Zero disables the SLA check.
 	MinHardeningScore int `json:"min_hardening_score"`
@@ -601,14 +636,14 @@ type AlertRules struct {
 
 // TrendPoint is one sample in a posture time series.
 type TrendPoint struct {
-	At              time.Time `json:"at"`
-	ScanID          string    `json:"scan_id"`
-	ScanName        string    `json:"scan_name"`
-	HostsOpen       int64     `json:"hosts_open"`
-	FindingsTotal   int64     `json:"findings_total"`
-	Critical        int64     `json:"critical"`
-	High            int64     `json:"high"`
-	OpenTriage      int64     `json:"open_triage"`
+	At            time.Time `json:"at"`
+	ScanID        string    `json:"scan_id"`
+	ScanName      string    `json:"scan_name"`
+	HostsOpen     int64     `json:"hosts_open"`
+	FindingsTotal int64     `json:"findings_total"`
+	Critical      int64     `json:"critical"`
+	High          int64     `json:"high"`
+	OpenTriage    int64     `json:"open_triage"`
 }
 
 // TrendSeries is the baseline/trend payload for the reports hub.
@@ -619,29 +654,29 @@ type TrendSeries struct {
 
 // ScanDiff summarises the posture delta between a base scan and a later one.
 type ScanDiff struct {
-	BaseID          string            `json:"base_id"`
-	AgainstID       string            `json:"against_id"`
-	BaseName        string            `json:"base_name"`
-	AgainstName     string            `json:"against_name"`
-	HostsAdded      []Host            `json:"hosts_added"`
-	HostsRemoved    []Host            `json:"hosts_removed"`
-	HostsChanged    []HostChange      `json:"hosts_changed"`
-	FindingsAdded   []Finding         `json:"findings_added"`
-	FindingsRemoved []Finding         `json:"findings_removed"`
-	FindingsChanged []FindingChange   `json:"findings_changed"`
-	Summary         ScanDiffSummary   `json:"summary"`
+	BaseID          string          `json:"base_id"`
+	AgainstID       string          `json:"against_id"`
+	BaseName        string          `json:"base_name"`
+	AgainstName     string          `json:"against_name"`
+	HostsAdded      []Host          `json:"hosts_added"`
+	HostsRemoved    []Host          `json:"hosts_removed"`
+	HostsChanged    []HostChange    `json:"hosts_changed"`
+	FindingsAdded   []Finding       `json:"findings_added"`
+	FindingsRemoved []Finding       `json:"findings_removed"`
+	FindingsChanged []FindingChange `json:"findings_changed"`
+	Summary         ScanDiffSummary `json:"summary"`
 }
 
 // ScanDiffSummary is the compact counter block shown above a diff.
 type ScanDiffSummary struct {
-	HostsAdded           int `json:"hosts_added"`
-	HostsRemoved         int `json:"hosts_removed"`
-	HostsChanged         int `json:"hosts_changed"`
-	FindingsAdded        int `json:"findings_added"`
-	FindingsRemoved      int `json:"findings_removed"`
-	FindingsChanged      int `json:"findings_changed"`
-	FindingsRemediated   int `json:"findings_remediated"`
-	HardeningScoreDelta  int `json:"hardening_score_delta"`
+	HostsAdded          int `json:"hosts_added"`
+	HostsRemoved        int `json:"hosts_removed"`
+	HostsChanged        int `json:"hosts_changed"`
+	FindingsAdded       int `json:"findings_added"`
+	FindingsRemoved     int `json:"findings_removed"`
+	FindingsChanged     int `json:"findings_changed"`
+	FindingsRemediated  int `json:"findings_remediated"`
+	HardeningScoreDelta int `json:"hardening_score_delta"`
 }
 
 // HostChange records field-level differences for one endpoint that appears in
@@ -665,12 +700,12 @@ type HostSnap struct {
 // FindingChange records a finding that exists on both scans but changed status
 // or severity.
 type FindingChange struct {
-	Address  string         `json:"address"`
-	Port     uint16         `json:"port"`
-	CheckID  string         `json:"check_id"`
-	Title    string         `json:"title"`
-	Before   FindingSnap    `json:"before"`
-	After    FindingSnap    `json:"after"`
+	Address string      `json:"address"`
+	Port    uint16      `json:"port"`
+	CheckID string      `json:"check_id"`
+	Title   string      `json:"title"`
+	Before  FindingSnap `json:"before"`
+	After   FindingSnap `json:"after"`
 }
 
 // FindingSnap is the comparable slice of a finding.

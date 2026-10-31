@@ -15,11 +15,11 @@ import (
 
 // Config holds every runtime setting of the tool.
 type Config struct {
-	DBPath           string        `json:"db_path"`
-	OutputsDir       string        `json:"outputs_dir"`
-	Concurrency      int           `json:"concurrency"`
-	Rate             float64       `json:"rate"`
-	Timeout          time.Duration `json:"timeout"`
+	DBPath             string        `json:"db_path"`
+	OutputsDir         string        `json:"outputs_dir"`
+	Concurrency        int           `json:"concurrency"`
+	Rate               float64       `json:"rate"`
+	Timeout            time.Duration `json:"timeout"`
 	MaxTargets         int           `json:"max_targets"`
 	MaxAuthFailures    int           `json:"max_auth_failures"`
 	MaxConcurrentScans int           `json:"max_concurrent_scans"`
@@ -29,6 +29,8 @@ type Config struct {
 	LogFormat          string        `json:"log_format"`
 	UserWordlist       string        `json:"user_wordlist"`
 	PasswordWordlist   string        `json:"password_wordlist"`
+	WebhookURL         string        `json:"webhook_url"`
+	WebhookLevel       string        `json:"webhook_level"`
 }
 
 // Default returns the built-in configuration values.
@@ -47,6 +49,7 @@ func Default() Config {
 		LogFormat:          "text",
 		UserWordlist:       "wordlists/default_users.txt",
 		PasswordWordlist:   "wordlists/default_passwords.txt",
+		WebhookLevel:       "critical",
 	}
 }
 
@@ -91,6 +94,8 @@ func (c *Config) applyEnv(lookup func(string) (string, bool)) error {
 		{"RDSHOT_LOG_FORMAT", &c.LogFormat},
 		{"RDSHOT_USER_WORDLIST", &c.UserWordlist},
 		{"RDSHOT_PASSWORD_WORDLIST", &c.PasswordWordlist},
+		{"RDSHOT_WEBHOOK_URL", &c.WebhookURL},
+		{"RDSHOT_WEBHOOK_LEVEL", &c.WebhookLevel},
 	}
 	for _, s := range strs {
 		if v, ok := lookup(s.key); ok {

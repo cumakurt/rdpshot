@@ -9,9 +9,9 @@ import (
 
 // Primary drawing order types used by this MVP (MS-RDPBCGR 2.2.9.1.1.3.1.1).
 const (
-	orderPatBlt  byte = 0x01
-	orderScrBlt  byte = 0x02
-	orderMemBlt  byte = 0x0D
+	orderPatBlt byte = 0x01
+	orderScrBlt byte = 0x02
+	orderMemBlt byte = 0x0D
 )
 
 type bitmapCache struct {

@@ -7,17 +7,17 @@ import (
 
 // Client Info Packet flags (MS-RDPBCGR 2.2.1.11.1.1).
 const (
-	infoMouse              uint32 = 0x00000001
-	infoDisableCtrlAltDel  uint32 = 0x00000002
-	infoAutoLogon          uint32 = 0x00000008
-	infoUnicode            uint32 = 0x00000010
-	infoMaximizeShell      uint32 = 0x00000020
-	infoLogonNotify        uint32 = 0x00000040
-	infoEnableWindowsKey   uint32 = 0x00000100
-	infoLogonErrors        uint32 = 0x00010000
-	infoMouseHasWheel      uint32 = 0x00020000
+	infoMouse               uint32 = 0x00000001
+	infoDisableCtrlAltDel   uint32 = 0x00000002
+	infoAutoLogon           uint32 = 0x00000008
+	infoUnicode             uint32 = 0x00000010
+	infoMaximizeShell       uint32 = 0x00000020
+	infoLogonNotify         uint32 = 0x00000040
+	infoEnableWindowsKey    uint32 = 0x00000100
+	infoLogonErrors         uint32 = 0x00010000
+	infoMouseHasWheel       uint32 = 0x00020000
 	infoForceEncryptedCSPDU uint32 = 0x00040000
-	infoNoAudioPlayback    uint32 = 0x00080000
+	infoNoAudioPlayback     uint32 = 0x00080000
 )
 
 // buildClientInfoPDU builds the MCS user-data payload for the Client Info
@@ -57,10 +57,10 @@ func buildClientInfoPDU(domain, user, password string) []byte {
 	dirName := utf16z("C:\\")
 	ext = binary.LittleEndian.AppendUint16(ext, uint16(len(dirName)))
 	ext = append(ext, dirName...)
-	ext = append(ext, make([]byte, 64)...)                          // clientTimeZone (SYSTEMTIME*2 + bias)
-	ext = binary.LittleEndian.AppendUint32(ext, 0)                   // clientSessionId
-	ext = binary.LittleEndian.AppendUint32(ext, 0)                   // performanceFlags
-	ext = binary.LittleEndian.AppendUint16(ext, 0)                   // cbAutoReconnectCookie
+	ext = append(ext, make([]byte, 64)...)         // clientTimeZone (SYSTEMTIME*2 + bias)
+	ext = binary.LittleEndian.AppendUint32(ext, 0) // clientSessionId
+	ext = binary.LittleEndian.AppendUint32(ext, 0) // performanceFlags
+	ext = binary.LittleEndian.AppendUint16(ext, 0) // cbAutoReconnectCookie
 	body = append(body, ext...)
 	return body
 }

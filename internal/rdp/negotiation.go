@@ -1,6 +1,11 @@
 package rdp
 
-import "fmt"
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+)
 
 // RDP negotiation protocol identifiers (MS-RDPBCGR 2.2.1.2).
 const (
@@ -93,6 +98,34 @@ type NegotiationResult struct {
 // NLARequired reports whether the outcome forces network level authentication.
 func (r NegotiationResult) NLARequired() bool {
 	return r.SelectedProtocol == ProtocolHybrid || r.SelectedProtocol == ProtocolHybridEx
+}
+
+// Early User Authorization Result PDU values (MS-RDPBCGR 2.2.15.2).
+const (
+	EarlyUserAuthorizationSuccess      uint32 = 0x00000000
+	EarlyUserAuthorizationAccessDenied uint32 = 0x00000005
+)
+
+// ErrEarlyUserAccessDenied reports that HYBRID_EX early-user authorization
+// rejected the delegated credentials after CredSSP completed.
+var ErrEarlyUserAccessDenied = errors.New("rdp: early user authorization access denied")
+
+// ReadEarlyUserAuthorizationResult consumes the 4-byte HYBRID_EX Early User
+// Authorization Result PDU that follows CredSSP on the TLS stream (not TPKT).
+func ReadEarlyUserAuthorizationResult(r io.Reader) error {
+	var buf [4]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return fmt.Errorf("rdp: read early user authorization result: %w", err)
+	}
+	code := binary.LittleEndian.Uint32(buf[:])
+	switch code {
+	case EarlyUserAuthorizationSuccess:
+		return nil
+	case EarlyUserAuthorizationAccessDenied:
+		return ErrEarlyUserAccessDenied
+	default:
+		return fmt.Errorf("rdp: unexpected early user authorization result 0x%08x", code)
+	}
 }
 
 // Failed reports whether the server rejected the negotiation request.

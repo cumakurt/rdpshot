@@ -17,6 +17,10 @@
           <input type="radio" name="auth_mode" value="pth" class="checkbox" data-auth-mode>
           Pass-the-hash (NT hash)
         </label>
+        <label class="check-row">
+          <input type="radio" name="auth_mode" value="kerberos" class="checkbox" data-auth-mode>
+          Pass-the-ticket (Kerberos CCache)
+        </label>
       </div>
     </fieldset>
 
@@ -70,6 +74,15 @@
             data-auth-cred-field disabled>
           <p class="wordlist-hint mt-2">
             CredSSP/NTLMv2 with the NT hash. Screenshots use the Go framebuffer path only (FreeRDP skipped).
+          </p>
+        </div>
+        <div class="field hidden" data-auth-panel="kerberos" hidden>
+          <label for="{{ .IDPrefix }}-auth-ccache" class="label">Kerberos CCache path</label>
+          <input id="{{ .IDPrefix }}-auth-ccache" name="auth_ccache" type="text"
+            class="input input-mono" placeholder="/path/to/krb5cc_1000" autocomplete="off" spellcheck="false"
+            data-auth-cred-field disabled>
+          <p class="wordlist-hint mt-2">
+            Kerberos credentials cache file (pass-the-ticket). Password/hash not required.
           </p>
         </div>
       </div>

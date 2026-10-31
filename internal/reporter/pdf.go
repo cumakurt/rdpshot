@@ -64,6 +64,7 @@ func PDF(w io.Writer, d Data) error {
 
 	doc.AddPage()
 	pdfSeverityTable(doc, d)
+	pdfComplianceMatrixSection(doc, d)
 	pdfFindingsTable(doc, d)
 	pdfRemediationSection(doc, d)
 	pdfScreenshotsSection(doc, d)
@@ -238,6 +239,61 @@ func pdfSeverityTable(doc *fpdf.Fpdf, d Data) {
 	doc.Ln(4)
 }
 
+// pdfComplianceMatrixSection renders the compliance mapping table.
+func pdfComplianceMatrixSection(doc *fpdf.Fpdf, d Data) {
+	type compKey struct {
+		standard string
+		section  string
+	}
+	type compRow struct {
+		standard string
+		section  string
+		title    string
+		count    int
+	}
+	compMap := make(map[compKey]*compRow)
+	var compKeys []compKey
+	for _, f := range d.Findings {
+		for _, c := range f.Compliance {
+			k := compKey{standard: c.Standard, section: c.Section}
+			row, exists := compMap[k]
+			if !exists {
+				row = &compRow{
+					standard: c.Standard,
+					section:  c.Section,
+					title:    c.Title,
+				}
+				compMap[k] = row
+				compKeys = append(compKeys, k)
+			}
+			row.count++
+		}
+	}
+	if len(compKeys) == 0 {
+		return
+	}
+	pdfSectionHeading(doc, "Compliance & Audit Matrix")
+	cols := []pdfColumn{
+		{Text: "Standard", Width: 25},
+		{Text: "Section", Width: 25},
+		{Text: "Benchmark Requirement", Width: 110},
+		{Text: "Findings", Width: 20},
+	}
+	pdfTableHeader(doc, cols, pdfTableLineHMm)
+	doc.SetFont(pdfFontFamily, "", 8)
+	doc.SetTextColor(45, 45, 45)
+	for _, k := range compKeys {
+		r := compMap[k]
+		pdfTableRow(doc, []pdfColumn{
+			{Text: r.standard, Width: 25},
+			{Text: r.section, Width: 25},
+			{Text: r.title, Width: 110},
+			{Text: fmt.Sprintf("%d", r.count), Width: 20},
+		}, pdfTableLineHMm, false)
+	}
+	doc.Ln(4)
+}
+
 // pdfFindingsTable renders the top findings table, most severe first.
 func pdfFindingsTable(doc *fpdf.Fpdf, d Data) {
 	pdfSectionHeading(doc, "Findings")
@@ -344,6 +400,13 @@ func pdfRemediationSection(doc *fpdf.Fpdf, d Data) {
 		body := strings.TrimSpace(f.Remediation)
 		if body == "" {
 			body = "No remediation guidance recorded."
+		}
+		if len(f.Compliance) > 0 {
+			var compParts []string
+			for _, c := range f.Compliance {
+				compParts = append(compParts, c.Standard+" "+c.Section)
+			}
+			body += "\nCompliance Benchmarks: " + strings.Join(compParts, " | ")
 		}
 		pdfRemediationEntry(doc, heading, body)
 	}

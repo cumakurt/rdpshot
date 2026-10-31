@@ -32,20 +32,21 @@ func TestBuildGCCClientDataLayout(t *testing.T) {
 		t.Fatalf("serverSelectedProtocol mismatch: %s", hex.EncodeToString(core[212:216]))
 	}
 
-	cluster := blocks[216:228]
-	if hex.EncodeToString(cluster[:4]) != "04c00c00" {
-		t.Fatalf("CS_CLUSTER header mismatch: %s", hex.EncodeToString(cluster[:4]))
-	}
-	security := blocks[228:240]
+	// Order matches FreeRDP: core, security, network, cluster.
+	security := blocks[216:228]
 	if hex.EncodeToString(security[:4]) != "02c00c00" {
 		t.Fatalf("CS_SECURITY header mismatch: %s", hex.EncodeToString(security[:4]))
 	}
-	network := blocks[240:]
+	network := blocks[228:248]
 	if hex.EncodeToString(network[:4]) != "03c01400" {
 		t.Fatalf("CS_NET header mismatch: %s", hex.EncodeToString(network[:4]))
 	}
 	if hex.EncodeToString(network[8:16]) != "4d535f5431323000" {
 		t.Fatalf("channel name mismatch: %s", hex.EncodeToString(network[8:16]))
+	}
+	cluster := blocks[248:260]
+	if hex.EncodeToString(cluster[:4]) != "04c00c00" {
+		t.Fatalf("CS_CLUSTER header mismatch: %s", hex.EncodeToString(cluster[:4]))
 	}
 }
 

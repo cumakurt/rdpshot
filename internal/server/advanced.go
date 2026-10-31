@@ -18,9 +18,9 @@ import (
 
 // SIEMConfig is the persisted SIEM sink configuration.
 type SIEMConfig struct {
-	WebhookURL string     `json:"webhook_url"`
+	WebhookURL string      `json:"webhook_url"`
 	Format     siem.Format `json:"format"`
-	Enabled    bool       `json:"enabled"`
+	Enabled    bool        `json:"enabled"`
 }
 
 // CredentialReuseEntry summarises one account seen on multiple hosts.

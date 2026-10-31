@@ -532,3 +532,35 @@ func TestMapNTStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestSecretFromCredential(t *testing.T) {
+	// Password
+	credPass := model.Credential{Username: "u", Secret: "mypassword", Method: model.CredMethodPassword}
+	secPass, err := secretFromCredential(credPass)
+	if err != nil {
+		t.Fatalf("secretFromCredential(password) failed: %v", err)
+	}
+	if secPass.Password != "mypassword" || len(secPass.NTHash) != 0 || secPass.CCachePath != "" {
+		t.Errorf("unexpected secret for password: %+v", secPass)
+	}
+
+	// Kerberos CCache
+	credKerb := model.Credential{Username: "u", Secret: "/tmp/test.ccache", Method: model.CredMethodKerberos}
+	secKerb, err := secretFromCredential(credKerb)
+	if err != nil {
+		t.Fatalf("secretFromCredential(kerberos) failed: %v", err)
+	}
+	if secKerb.CCachePath != "/tmp/test.ccache" || secKerb.Password != "" || len(secKerb.NTHash) != 0 {
+		t.Errorf("unexpected secret for kerberos: %+v", secKerb)
+	}
+
+	// NTHash
+	credPTH := model.Credential{Username: "u", Secret: "0123456789abcdef0123456789abcdef", Method: model.CredMethodNTHash}
+	secPTH, err := secretFromCredential(credPTH)
+	if err != nil {
+		t.Fatalf("secretFromCredential(nthash) failed: %v", err)
+	}
+	if len(secPTH.NTHash) != 16 || secPTH.Password != "" || secPTH.CCachePath != "" {
+		t.Errorf("unexpected secret for nthash: %+v", secPTH)
+	}
+}

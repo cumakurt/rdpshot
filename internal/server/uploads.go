@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"rdpshot/internal/brute"
+	"rdpshot/internal/target"
 )
 
 // uploadsDirName is the subdirectory of OutputsDir holding per-scan uploads.
@@ -113,17 +115,38 @@ func readTargetsUpload(file *multipart.FileHeader) ([]string, error) {
 	}
 	defer src.Close()
 
-	scanner := bufio.NewScanner(io.LimitReader(src, maxTargetsUploadBytes+1))
+	data, err := io.ReadAll(io.LimitReader(src, maxTargetsUploadBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read targets file: %w", err)
+	}
+	if int64(len(data)) > maxTargetsUploadBytes {
+		return nil, fmt.Errorf("targets file exceeds the %d MiB limit", maxTargetsUploadBytes>>20)
+	}
+
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+
+	// Check if the uploaded file is an Nmap XML or Masscan output
+	if bytes.HasPrefix(trimmed, []byte("<?xml")) || bytes.HasPrefix(trimmed, []byte("<nmaprun")) ||
+		bytes.HasPrefix(trimmed, []byte("[")) || bytes.HasPrefix(trimmed, []byte("open tcp")) ||
+		(bytes.Contains(trimmed, []byte("<host")) && bytes.Contains(trimmed, []byte("</host>"))) {
+		eps, err := target.ParseImport(bytes.NewReader(trimmed))
+		if err == nil && len(eps) > 0 {
+			var specs []string
+			for _, ep := range eps {
+				specs = append(specs, ep.Key())
+			}
+			return specs, nil
+		}
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(trimmed))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	var specs []string
-	var total int64
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		total += int64(len(line)) + 1
-		if total > maxTargetsUploadBytes {
-			return nil, fmt.Errorf("targets file exceeds the %d MiB limit", maxTargetsUploadBytes>>20)
-		}
-		text := strings.TrimSpace(string(line))
+		text := strings.TrimSpace(scanner.Text())
 		if text == "" || strings.HasPrefix(text, "#") {
 			continue
 		}

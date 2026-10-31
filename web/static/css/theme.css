@@ -1,0 +1,148 @@
+/* RDPShot — Theme System: Corporate Clean (Light) & Command Center (Dark)
+ * Provides distinct visual identities with responsive theme switching.
+ */
+
+/* ==========================================================================
+   Corporate Clean (Light Theme)
+   ========================================================================== */
+:root,
+html[data-theme="corporate-clean"]:not(.dark) {
+  --theme-name: "Corporate Clean";
+
+  /* Surfaces & Backgrounds */
+  --theme-bg-base: #f8fafc;
+  --theme-bg-gradient: radial-gradient(1200px 600px at 15% -10%, rgba(99, 102, 241, 0.08), transparent 65%);
+  --theme-surface-primary: #ffffff;
+  --theme-surface-secondary: #f1f5f9;
+  --theme-surface-glass: rgba(255, 255, 255, 0.85);
+
+  /* Borders & Dividers */
+  --theme-border-subtle: #e2e8f0;
+  --theme-border-strong: #cbd5e1;
+  --theme-border-highlight: rgba(79, 70, 229, 0.35);
+
+  /* Typography */
+  --theme-text-primary: #0f172a;
+  --theme-text-secondary: #334155;
+  --theme-text-muted: #64748b;
+
+  /* Brand & Accents */
+  --theme-accent: #4f46e5;
+  --theme-accent-hover: #4338ca;
+  --theme-accent-subtle: rgba(79, 70, 229, 0.08);
+  --theme-accent-glow: none;
+
+  /* Shadows */
+  --theme-shadow-card: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 6px -1px rgba(15, 23, 42, 0.04);
+  --theme-shadow-elevated: 0 10px 25px -5px rgba(15, 23, 42, 0.08), 0 8px 10px -6px rgba(15, 23, 42, 0.04);
+
+  /* Status Colors */
+  --theme-critical: #dc2626;
+  --theme-critical-bg: #fef2f2;
+  --theme-high: #ea580c;
+  --theme-high-bg: #fff7ed;
+  --theme-medium: #d97706;
+  --theme-medium-bg: #fffbeb;
+  --theme-success: #16a34a;
+  --theme-success-bg: #f0fdf4;
+}
+
+/* ==========================================================================
+   Command Center (Cyber Dark Theme)
+   ========================================================================== */
+html.dark,
+html[data-theme="command-center"].dark {
+  --theme-name: "Command Center";
+
+  /* Surfaces & Backgrounds */
+  --theme-bg-base: #030712;
+  --theme-bg-gradient: radial-gradient(1200px 600px at 15% -10%, rgba(99, 102, 241, 0.16), transparent 70%),
+                       radial-gradient(800px 400px at 85% 90%, rgba(14, 165, 233, 0.08), transparent 60%);
+  --theme-surface-primary: #0b0f19;
+  --theme-surface-secondary: #111827;
+  --theme-surface-glass: rgba(11, 15, 25, 0.85);
+
+  /* Borders & Dividers */
+  --theme-border-subtle: #1e293b;
+  --theme-border-strong: #334155;
+  --theme-border-highlight: rgba(99, 102, 241, 0.5);
+
+  /* Typography */
+  --theme-text-primary: #f8fafc;
+  --theme-text-secondary: #cbd5e1;
+  --theme-text-muted: #94a3b8;
+
+  /* Brand & Cyber Accents */
+  --theme-accent: #6366f1;
+  --theme-accent-hover: #818cf8;
+  --theme-accent-subtle: rgba(99, 102, 241, 0.14);
+  --theme-accent-glow: 0 0 16px rgba(99, 102, 241, 0.4);
+
+  /* Cyber Glows & Shadows */
+  --theme-shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.7), 0 0 1px rgba(99, 102, 241, 0.3);
+  --theme-shadow-elevated: 0 16px 36px -4px rgba(0, 0, 0, 0.85), 0 0 24px -2px rgba(99, 102, 241, 0.25);
+
+  /* Status Colors */
+  --theme-critical: #f43f5e;
+  --theme-critical-bg: rgba(244, 63, 94, 0.12);
+  --theme-high: #fb923c;
+  --theme-high-bg: rgba(251, 146, 60, 0.12);
+  --theme-medium: #fbbf24;
+  --theme-medium-bg: rgba(251, 191, 36, 0.12);
+  --theme-success: #34d399;
+  --theme-success-bg: rgba(52, 211, 153, 0.12);
+}
+
+/* ==========================================================================
+   Smooth Transitions & Interactive Effects
+   ========================================================================== */
+body,
+.site-header,
+.card,
+.stat-card,
+.table-wrap,
+.btn,
+.input,
+.theme-toggle {
+  transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Command Center Hover Glow on Cards */
+html.dark .card:hover,
+html.dark .stat-card:hover {
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 0 0 20px -4px rgba(99, 102, 241, 0.18), 0 4px 20px -2px rgba(0, 0, 0, 0.7);
+}
+
+/* Theme Toggle Button Micro-interactions */
+.theme-toggle {
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+}
+
+.theme-toggle:active {
+  transform: scale(0.92);
+}
+
+.theme-toggle svg {
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
+}
+
+.theme-toggle:hover svg {
+  transform: rotate(15deg);
+}
+
+html.dark .theme-toggle:hover svg {
+  transform: rotate(-15deg);
+}
+
+/* Cyber Terminal Glow */
+html.dark pre,
+html.dark .terminal,
+html.dark code.block {
+  box-shadow: 0 0 25px -5px rgba(56, 189, 248, 0.08);
+}

@@ -185,6 +185,16 @@
                           <p class="panel-body">{{ $f.Remediation }}</p>
                           <p class="mt-2 text-xs"><a href="/api/v1/playbooks/{{ $f.CheckID }}">Open remediation playbook (JSON)</a></p>
                         </div>
+                        {{ if $f.Compliance }}
+                        <div class="panel">
+                          <h3 class="panel-title">Compliance & Benchmarks</h3>
+                          <div class="flex flex-wrap gap-2 mt-2">
+                            {{ range $f.Compliance }}
+                            <span class="badge badge-outline" title="{{ .Title }}"><strong>{{ .Standard }}</strong> {{ .Section }}</span>
+                            {{ end }}
+                          </div>
+                        </div>
+                        {{ end }}
                         <div class="panel">
                           <h3 class="panel-title">Triage note</h3>
                           <textarea class="textarea" rows="2" data-triage-note="{{ $f.ID }}" placeholder="Operator note">{{ $f.TriageNote }}</textarea>
@@ -337,6 +347,9 @@
                     <td class="cell-mono">{{ .Endpoint.Port }}</td>
                     <td>
                       <span class="badge badge-emerald">{{ .State }}</span>
+                      {{ if .Service }}
+                        {{ if .Service.HoneypotDetected }}<span class="badge badge-amber ml-1" title="{{ .Service.HoneypotReason }}">honeypot</span>{{ end }}
+                      {{ end }}
                     </td>
                     <td>
                       {{ if .Service }}
