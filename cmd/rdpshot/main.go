@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"rdpshot/internal/about"
 	"rdpshot/internal/auth"
 	"rdpshot/internal/config"
+	"rdpshot/internal/decoy"
 	"rdpshot/internal/events"
 	"rdpshot/internal/model"
 	"rdpshot/internal/policy"
@@ -60,6 +62,7 @@ Commands:
   report    Generate a report from stored scan results.
   policy    Evaluate hardening policy against a stored scan (CI gate).
   targets   Resolve target specifications and print the endpoints.
+  listen    Start a decoy RDP honeypot listener to detect internal attackers.
   version   Print the tool version and developer credits.
 
 Use "rdpshot <command> -h" for the flags of a command.
@@ -103,6 +106,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPolicy(args[1:], stdout, stderr)
 	case "targets":
 		return runTargets(args[1:], stdout, stderr)
+	case "listen":
+		return runListen(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprint(stdout, about.VersionBanner(version))
 		return exitOK
@@ -1027,4 +1032,113 @@ Exit codes: 0 pass, 1 policy fail, 2 error`)
 		return exitOK
 	}
 	return exitError
+}
+
+// runListen starts a decoy RDP honeypot listener that simulates a vulnerable
+// Windows RDP server. Every connection attempt is logged as a critical event
+// and optionally forwarded to a webhook.
+//
+//	rdpshot listen [--bind 0.0.0.0:3389] [--decoy-port 3389] [--notify-webhook URL]
+func runListen(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("listen",
+		"listen [flags]",
+		"Start a decoy RDP honeypot listener to detect internal attackers.",
+		stderr)
+
+	bind       := fs.String("bind", "0.0.0.0:13389", "Listen address (host:port)")
+	decoyPort  := fs.Int("decoy-port", 0, "Shorthand: port to listen on (overrides --bind port when set)")
+	webhookURL := fs.String("notify-webhook", "", "Webhook URL to fire on every attacker connection (Slack/Discord/Teams/generic)")
+	dbPath     := fs.String("db", "rdpshot.db", "Path to the rdpshot SQLite database (for persistent event log)")
+	logLvl     := fs.String("log-level", "info", "Log level: debug, info, warn, error")
+
+	if err := fs.Parse(args); err != nil {
+		return flagErrorExit(err)
+	}
+
+	bindAddr := *bind
+	if *decoyPort != 0 {
+		host, _, err := net.SplitHostPort(bindAddr)
+		if err != nil {
+			host = "0.0.0.0"
+		}
+		bindAddr = fmt.Sprintf("%s:%d", host, *decoyPort)
+	}
+
+	logger := newLogger(*logLvl, "text", stderr)
+	logger.Info("rdpshot listen — decoy RDP honeypot starting",
+		"bind", bindAddr,
+		"webhook", *webhookURL)
+
+	// Open store for persistent event log (best-effort; non-fatal if unavailable).
+	var st *store.Store
+	if *dbPath != "" {
+		var err error
+		st, err = store.Open(*dbPath)
+		if err != nil {
+			logger.Warn("could not open database for decoy events; events will be in-memory only",
+				"path", *dbPath, "err", err)
+		}
+	}
+
+	wh := strings.TrimSpace(*webhookURL)
+
+	opts := decoy.Options{
+		BindAddr: bindAddr,
+		Logger:   logger,
+		OnEvent: func(ev decoy.DecoyEvent) {
+			fmt.Fprintf(stdout, "[DECOY] %s  remote=%s  ntlm_user=%q  ntlm_domain=%q\n",
+				ev.At.Format(time.RFC3339), ev.RemoteIP, ev.NTLMUsername, ev.NTLMDomain)
+
+			if st != nil {
+				if err := st.InsertDecoyEvent(ev); err != nil {
+					logger.Warn("failed to persist decoy event", "err", err)
+				}
+			}
+
+			if wh != "" {
+				go sendDecoyWebhookCLI(wh, ev)
+			}
+		},
+	}
+
+	listener := decoy.New(opts)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := listener.Start(ctx); err != nil {
+		fmt.Fprintf(stderr, "rdpshot listen: %v\n", err)
+		return exitError
+	}
+	fmt.Fprintf(stdout, "Decoy RDP listener active on %s — press Ctrl+C to stop\n", bindAddr)
+	<-ctx.Done()
+	listener.Stop()
+	if st != nil {
+		_ = st.Close()
+	}
+	fmt.Fprintln(stdout, "Decoy listener stopped.")
+	return exitOK
+}
+
+func sendDecoyWebhookCLI(url string, ev decoy.DecoyEvent) {
+	payload, _ := json.Marshal(map[string]any{
+		"type":        "decoy.attacker_detected",
+		"at":          ev.At.Format(time.RFC3339),
+		"remote_ip":   ev.RemoteIP,
+		"ntlm_user":   ev.NTLMUsername,
+		"ntlm_domain": ev.NTLMDomain,
+		"severity":    "critical",
+		"message":     fmt.Sprintf("🪤 DECOY ALERT: Attacker %s connected to RDP honeypot", ev.RemoteIP),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }

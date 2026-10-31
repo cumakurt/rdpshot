@@ -1,0 +1,88 @@
+{{ define "mitre" }}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="antialiased">
+    {{ template "nav" . }}
+    <main class="page-main">
+      <section class="page-head">
+        <div>
+          <p class="page-eyebrow">Red Team</p>
+          <h1 class="page-title mt-1">MITRE ATT&amp;CK Coverage</h1>
+          <p class="page-subtitle">RDP-relevant technique detection &amp; mitigation status across your estate.</p>
+        </div>
+      </section>
+
+      <!-- Filters -->
+      <section class="card mb-6">
+        <div class="flex flex-wrap gap-4 items-end p-4">
+          <div class="flex-1 min-w-[200px]">
+            <label class="label" for="mitreEngagement">Engagement</label>
+            <select id="mitreEngagement" class="input">
+              <option value="">— All Engagements —</option>
+              {{ range .Engagements }}<option value="{{ . }}">{{ . }}</option>{{ end }}
+            </select>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <label class="label" for="mitreScanId">Scan</label>
+            <select id="mitreScanId" class="input">
+              <option value="">— All Recent Scans —</option>
+              {{ range .Scans }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+            </select>
+          </div>
+          <button id="mitreLoadBtn" class="btn btn-primary">Load Heatmap</button>
+        </div>
+      </section>
+
+      <!-- Summary KPIs -->
+      <div id="mitreKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 hidden">
+        <div class="stat-card" style="border-top:3px solid #ef4444">
+          <div class="stat-value" id="kpiDetected" style="color:#ef4444">0</div>
+          <div class="stat-label">Detected</div>
+        </div>
+        <div class="stat-card" style="border-top:3px solid #f59e0b">
+          <div class="stat-value" id="kpiPotential" style="color:#f59e0b">0</div>
+          <div class="stat-label">Potential</div>
+        </div>
+        <div class="stat-card" style="border-top:3px solid #22c55e">
+          <div class="stat-value" id="kpiMitigated" style="color:#22c55e">0</div>
+          <div class="stat-label">Mitigated</div>
+        </div>
+        <div class="stat-card" style="border-top:3px solid #6b7280">
+          <div class="stat-value" id="kpiNA" style="color:#6b7280">0</div>
+          <div class="stat-label">Not Applicable</div>
+        </div>
+      </div>
+
+      <!-- Heatmap Grid -->
+      <div id="mitreGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+
+      <div id="mitreEmpty" class="text-center py-16" style="color:var(--text-muted,#9ca3af)">
+        <p class="text-lg font-semibold mb-2">No heatmap loaded</p>
+        <p class="text-sm">Select a scan or engagement above and click <strong>Load Heatmap</strong>.</p>
+      </div>
+    </main>
+
+    <style>
+      .mitre-card { border-radius:.5rem; padding:1rem; border-left:4px solid; transition:transform .15s; }
+      .mitre-card:hover { transform:translateX(3px); }
+      .mitre-detected       { border-color:#ef4444; background:rgba(239,68,68,.07); }
+      .mitre-potential      { border-color:#f59e0b; background:rgba(245,158,11,.07); }
+      .mitre-mitigated      { border-color:#22c55e; background:rgba(34,197,94,.07); }
+      .mitre-not_applicable { border-color:#6b7280; background:rgba(107,114,128,.04); }
+      .mitre-badge { display:inline-block; padding:2px 8px; border-radius:9999px; font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; white-space:nowrap; }
+      .badge-detected       { background:#ef4444; color:#fff; }
+      .badge-potential      { background:#f59e0b; color:#fff; }
+      .badge-mitigated      { background:#22c55e; color:#fff; }
+      .badge-not_applicable { background:#6b7280; color:#fff; }
+      .mitre-tactic  { font-size:.62rem; text-transform:uppercase; letter-spacing:.09em; margin-bottom:4px; opacity:.55; }
+      .evidence-tag  { display:inline-block; margin:2px; padding:1px 7px; border-radius:4px; font-size:.65rem; font-family:monospace; background:rgba(0,0,0,.12); }
+    </style>
+
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
+{{ end }}

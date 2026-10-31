@@ -39,18 +39,35 @@
       </section>
 
       <section class="card mb-6">
-        <div class="card-head">
+        <div class="card-head flex-wrap gap-2">
           <div>
-            <h2 class="card-title">Risk map</h2>
-            <p class="card-hint">X = hardening score (left weak → right strong). Y = finding risk (top high → bottom low). Size = findings.</p>
+            <h2 class="card-title">Estate Topology &amp; Attack Surface</h2>
+            <p class="card-hint">Switch between Risk Scatter Map and Credential Blast Radius &amp; Attack Graph.</p>
           </div>
-          <span class="badge badge-slate" data-estate-count>0 nodes</span>
+          <div class="flex items-center gap-3">
+            <div class="flex items-center rounded-lg border border-subtle p-0.5 bg-surface-secondary text-xs">
+              <button type="button" class="btn btn-ghost btn-xs is-active" id="btn-estate-scatter" data-estate-mode="scatter">Risk Scatter</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-estate-blast" data-estate-mode="blast">⚡ Blast Radius &amp; Attack Path</button>
+            </div>
+            <span class="badge badge-slate" data-estate-count>0 nodes</span>
+          </div>
         </div>
         <div class="card-body">
-          <div class="estate-map-wrap">
+          <div class="estate-map-wrap" id="estate-scatter-wrap">
             <svg id="estate-graph" viewBox="0 0 960 420" class="estate-map-svg" role="img" aria-label="Estate risk scatter plot"></svg>
             <div class="estate-tooltip hidden" data-estate-tooltip role="tooltip"></div>
           </div>
+
+          <div class="hidden relative rounded-lg border border-subtle bg-slate-950/80 overflow-hidden" id="estate-blast-wrap" style="min-height: 440px;">
+            <svg id="blast-graph" viewBox="0 0 960 440" class="w-full h-[440px]" role="img" aria-label="Credential blast radius attack graph"></svg>
+            <div id="blast-tooltip" class="estate-tooltip hidden"></div>
+            <div class="absolute bottom-3 left-3 bg-surface-primary/80 backdrop-blur-md p-2 rounded border border-subtle text-xs space-y-1">
+              <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> <span>Verified Credential</span></div>
+              <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span> <span>Host (RDP Endpoint)</span></div>
+              <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span> <span>Exploitable Flaw / Pivot</span></div>
+            </div>
+          </div>
+
           <p class="card-hint mt-3" data-estate-status>Loading estate graph…</p>
           <ul class="estate-sev-legend mt-4" data-estate-sev-legend aria-label="Severity legend"></ul>
         </div>
@@ -82,10 +99,11 @@
                 <th>Risk</th>
                 <th>Hardening</th>
                 <th>NLA / TLS</th>
+                <th>Connect</th>
               </tr>
             </thead>
             <tbody data-estate-tbody>
-              <tr><td colspan="7" class="table-empty">Loading…</td></tr>
+              <tr><td colspan="8" class="table-empty">Loading…</td></tr>
             </tbody>
           </table>
         </div>

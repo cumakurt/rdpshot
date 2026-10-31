@@ -150,6 +150,99 @@ func (s *Server) handleEstate(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, estate.Build(engagementName, hosts, findings))
 }
 
+func (s *Server) handleEstateBlastRadius(w http.ResponseWriter, r *http.Request) {
+	engagementName := strings.TrimSpace(r.URL.Query().Get("engagement"))
+	scanID := strings.TrimSpace(r.URL.Query().Get("scan"))
+	var hosts []model.Host
+	var findings []model.Finding
+	var creds []model.Credential
+
+	if scanID != "" {
+		h, err := s.deps.Store.ListHosts(scanID)
+		if err != nil {
+			s.internalError(w, r, "list hosts for blast radius", err)
+			return
+		}
+		hosts = h
+		f, err := s.deps.Store.ListFindings(scanID)
+		if err != nil {
+			s.internalError(w, r, "list findings for blast radius", err)
+			return
+		}
+		findings = f
+		c, err := s.deps.Store.ListCredentials(scanID)
+		if err != nil {
+			s.internalError(w, r, "list credentials for blast radius", err)
+			return
+		}
+		creds = c
+	} else {
+		scans, err := s.deps.Store.ListScansFiltered(recentScansLimit, engagementName, "")
+		if err != nil {
+			s.internalError(w, r, "list scans for blast radius", err)
+			return
+		}
+		for _, sc := range scans {
+			h, err := s.deps.Store.ListHosts(sc.ID)
+			if err == nil {
+				hosts = append(hosts, h...)
+			}
+			f, err := s.deps.Store.ListFindings(sc.ID)
+			if err == nil {
+				findings = append(findings, f...)
+			}
+			c, err := s.deps.Store.ListCredentials(sc.ID)
+			if err == nil {
+				creds = append(creds, c...)
+			}
+		}
+	}
+	s.writeJSON(w, http.StatusOK, estate.BuildBlastRadius(engagementName, hosts, creds, findings))
+}
+
+func (s *Server) handleScanCompliancePosture(w http.ResponseWriter, r *http.Request) {
+	scanID := r.PathValue("id")
+	var hosts []model.Host
+	var findings []model.Finding
+	var err error
+
+	if scanID == "all" || scanID == "" {
+		scans, err := s.deps.Store.ListScans(recentScansLimit)
+		if err != nil {
+			s.internalError(w, r, "list scans for compliance posture", err)
+			return
+		}
+		for _, sc := range scans {
+			h, err := s.deps.Store.ListHosts(sc.ID)
+			if err == nil {
+				hosts = append(hosts, h...)
+			}
+			f, err := s.deps.Store.ListFindings(sc.ID)
+			if err == nil {
+				findings = append(findings, f...)
+			}
+		}
+		s.writeJSON(w, http.StatusOK, score.EvaluateCompliancePosture("all", hosts, findings))
+		return
+	}
+
+	scan, ok := s.loadScan(w, r, scanID)
+	if !ok {
+		return
+	}
+	hosts, err = s.deps.Store.ListHosts(scan.ID)
+	if err != nil {
+		s.internalError(w, r, "list hosts for compliance posture", err)
+		return
+	}
+	findings, err = s.deps.Store.ListFindings(scan.ID)
+	if err != nil {
+		s.internalError(w, r, "list findings for compliance posture", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, score.EvaluateCompliancePosture(scan.ID, hosts, findings))
+}
+
 func (s *Server) handleCredentialReuse(w http.ResponseWriter, r *http.Request) {
 	scan, ok := s.loadScan(w, r, r.PathValue("id"))
 	if !ok {

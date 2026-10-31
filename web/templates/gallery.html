@@ -51,6 +51,9 @@
             {{ else }}
             <span class="gallery-badge gallery-badge-session">Session</span>
             {{ end }}
+            {{ if .IsSensitive }}
+            <span class="gallery-badge bg-rose-600/90 text-white font-semibold right-2 left-auto border border-rose-400">Sensitive UI</span>
+            {{ end }}
             <img src="{{ .FilePath }}"
               alt="{{ if eq .Username "rdp-open" }}Detection evidence for {{ .Address }}:{{ .Port }}{{ else if eq .Username "rdp-login" }}Pre-auth login screen for {{ .Address }}:{{ .Port }}{{ else }}RDP session screenshot from {{ .Address }}:{{ .Port }}{{ end }}"
               loading="lazy"
@@ -59,6 +62,8 @@
             <div class="gallery-overlay">
               <button type="button" class="btn btn-primary btn-sm" data-lightbox-open
                 data-full-src="{{ .FilePath }}"
+                data-screenshot-id="{{ .ID }}"
+                data-is-sensitive="{{ .IsSensitive }}"
                 data-alt="{{ if eq .Username "rdp-open" }}Detection evidence for {{ .Address }}:{{ .Port }}{{ else if eq .Username "rdp-login" }}Pre-auth login screen for {{ .Address }}:{{ .Port }}{{ else }}RDP session screenshot from {{ .Address }}:{{ .Port }}{{ end }}">
                 View Fullscreen
               </button>
@@ -71,7 +76,17 @@
             <p class="gallery-meta">scan: <span class="text-strong">{{ .ScanName }}</span></p>
             {{ end }}
             <p class="gallery-meta">{{ if eq .Username "rdp-open" }}NLA/TLS blocked pre-auth UI · evidence only{{ else if eq .Username "rdp-login" }}login screen · no credential{{ else }}user: <span class="text-strong">{{ .Username }}</span>{{ end }}</p>
-            <p class="gallery-note">{{ .CapturedAt.Format "2006-01-02 15:04:05" }}</p>
+            {{ if .SensitiveTags }}
+            <div class="flex flex-wrap gap-1 mt-1">
+              {{ range .SensitiveTags }}
+              <span class="badge badge-rose text-xs">{{ . }}</span>
+              {{ end }}
+            </div>
+            {{ end }}
+            {{ if .DetectedUsers }}
+            <p class="gallery-meta text-xs text-emerald-400 mt-1">OCR Users: <span class="font-mono font-medium">{{ range $i, $u := .DetectedUsers }}{{ if $i }}, {{ end }}{{ $u }}{{ end }}</span></p>
+            {{ end }}
+            <p class="gallery-note mt-1">{{ .CapturedAt.Format "2006-01-02 15:04:05" }}</p>
           </figcaption>
         </figure>
         {{ end }}
@@ -101,9 +116,24 @@
       <div id="gallery-lightbox" class="lightbox" role="dialog" aria-modal="true"
         aria-label="Fullscreen evidence image" hidden>
         <button type="button" class="lightbox-backdrop" aria-label="Close fullscreen preview" data-lightbox-close></button>
-        <figure class="lightbox-figure">
-          <img id="gallery-lightbox-image" alt="Fullscreen evidence image">
-          <button type="button" class="lightbox-close" data-lightbox-close>Close</button>
+        <figure class="lightbox-figure max-w-5xl w-full">
+          <div class="relative inline-block w-full text-center" id="lightbox-img-wrap">
+            <img id="gallery-lightbox-image" alt="Fullscreen evidence image" class="max-h-[75vh] mx-auto rounded shadow-2xl">
+            <div id="lightbox-bbox-overlay" class="absolute inset-0 pointer-events-none hidden"></div>
+          </div>
+          <div class="lightbox-toolbar mt-3 flex items-center justify-between gap-3 bg-surface-primary p-3 rounded-lg border border-subtle">
+            <div class="flex items-center gap-2">
+              <button type="button" id="toggle-ocr-boxes" class="btn btn-ghost btn-sm text-xs">
+                🔍 Toggle OCR &amp; Keywords
+              </button>
+              <div id="inspector-tags" class="flex items-center gap-1.5 flex-wrap"></div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" data-lightbox-close>Close</button>
+          </div>
+          <div id="inspector-details" class="mt-2 text-xs bg-black/75 p-3 rounded border border-subtle hidden font-mono text-slate-300">
+            <p><strong>Detected OCR Keywords:</strong> <span id="inspector-keywords" class="text-amber-400">—</span></p>
+            <p class="mt-1"><strong>Detected Accounts:</strong> <span id="inspector-users" class="text-emerald-400">—</span></p>
+          </div>
         </figure>
       </div>
     </main>

@@ -91,7 +91,10 @@ type EstateData struct {
 // GalleryItem is one gallery card with its owning scan label.
 type GalleryItem struct {
 	model.Screenshot
-	ScanName string
+	ScanName      string   `json:"scan_name"`
+	SensitiveTags []string `json:"sensitive_tags,omitempty"`
+	DetectedUsers []string `json:"detected_users,omitempty"`
+	IsSensitive   bool     `json:"is_sensitive"`
 }
 
 // GalleryData renders the screenshot gallery page.
@@ -513,10 +516,56 @@ func (s *Server) galleryItems(scans []model.Scan, selectedScanID string) ([]Gall
 		if err != nil {
 			return nil, err
 		}
+		hosts, _ := s.deps.Store.ListHosts(sc.ID)
+		hostMap := make(map[string]model.Host, len(hosts))
+		for _, h := range hosts {
+			hostMap[fmt.Sprintf("%s:%d", h.Endpoint.Address, h.Endpoint.Port)] = h
+		}
+
 		for _, shot := range screenshotViews(shots) {
+			hKey := fmt.Sprintf("%s:%d", shot.Address, shot.Port)
+			h := hostMap[hKey]
+			var tags []string
+			var detectedUsers []string
+			isSensitive := false
+
+			uLower := strings.ToLower(shot.Username)
+			if uLower != "" && uLower != "rdp-open" && uLower != "rdp-login" {
+				if strings.Contains(uLower, "admin") || strings.Contains(uLower, "root") || strings.Contains(uLower, "cmk") {
+					tags = append(tags, "Privileged Session")
+					isSensitive = true
+				} else {
+					tags = append(tags, "Active Session")
+				}
+			}
+
+			if h.Service != nil {
+				if len(h.Service.LoginUsers) > 0 {
+					detectedUsers = append(detectedUsers, h.Service.LoginUsers...)
+					tags = append(tags, "OCR Users Detected")
+					for _, lu := range h.Service.LoginUsers {
+						luLower := strings.ToLower(lu)
+						if strings.Contains(luLower, "admin") || strings.Contains(luLower, "root") {
+							tags = append(tags, "Admin Tile")
+							isSensitive = true
+						}
+					}
+				}
+				if h.Service.Certificate != nil {
+					certSub := strings.ToLower(h.Service.Certificate.Subject)
+					if strings.Contains(certSub, "prod") || strings.Contains(certSub, "dc") || strings.Contains(certSub, "corp") {
+						tags = append(tags, "Enterprise Infra")
+						isSensitive = true
+					}
+				}
+			}
+
 			items = append(items, GalleryItem{
-				Screenshot: shot,
-				ScanName:   names[sc.ID],
+				Screenshot:    shot,
+				ScanName:      names[sc.ID],
+				SensitiveTags: tags,
+				DetectedUsers: detectedUsers,
+				IsSensitive:   isSensitive,
 			})
 		}
 	}
@@ -567,4 +616,43 @@ func screenshotViews(screens []model.Screenshot) []model.Screenshot {
 func (s *Server) internalError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	s.deps.Logger.Error(what, "error", err.Error())
 	s.writeError(w, r, http.StatusInternalServerError, "internal server error")
+}
+
+// MITREPageData renders the MITRE ATT&CK heatmap page.
+type MITREPageData struct {
+	Title, ActiveNav string
+	Scans            []model.Scan
+	Engagements      []string
+}
+
+// DecoyPageData renders the honeypot / decoy listener management page.
+type DecoyPageData struct {
+	Title, ActiveNav string
+}
+
+// handleMITREPage renders the /mitre page.
+func (s *Server) handleMITREPage(w http.ResponseWriter, r *http.Request) {
+	scans, err := s.deps.Store.ListScans(recentScansLimit)
+	if err != nil {
+		s.internalError(w, r, "mitre page: list scans", err)
+		return
+	}
+	engagements, err := s.deps.Store.ListEngagementsDistinct()
+	if err != nil {
+		engagements = nil
+	}
+	s.renderPage(w, "mitre", MITREPageData{
+		Title:       "MITRE ATT&CK",
+		ActiveNav:   "mitre",
+		Scans:       scans,
+		Engagements: engagements,
+	})
+}
+
+// handleDecoyPage renders the /decoy page.
+func (s *Server) handleDecoyPage(w http.ResponseWriter, r *http.Request) {
+	s.renderPage(w, "decoy", DecoyPageData{
+		Title:     "Decoy / Honeypot",
+		ActiveNav: "decoy",
+	})
 }

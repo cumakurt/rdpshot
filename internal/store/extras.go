@@ -561,3 +561,26 @@ func (s *Store) BulkUpdateFindingTriage(ids []int64, status model.TriageStatus, 
 	}
 	return updated, nil
 }
+
+// ListEngagementsDistinct returns the sorted list of distinct non-empty
+// engagement labels found in the scans table.
+func (s *Store) ListEngagementsDistinct() ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT engagement
+		FROM scans
+		WHERE engagement != ''
+		ORDER BY engagement ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err == nil && e != "" {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}

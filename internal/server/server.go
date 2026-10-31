@@ -268,6 +268,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/scans/{id}/findings", s.handleScanFindings)
 	mux.HandleFunc("GET /api/v1/scans/{id}/hosts", s.handleScanHosts)
 	mux.HandleFunc("GET /api/v1/scans/{id}/screenshots", s.handleScanScreenshots)
+	mux.HandleFunc("GET /api/v1/screenshots/{id}/inspect", s.handleInspectScreenshot)
 	mux.HandleFunc("GET /api/v1/scans/{id}/credentials", s.handleScanCredentials)
 	mux.HandleFunc("GET /api/v1/scans/{id}/report", s.handleScanReport)
 	mux.HandleFunc("GET /api/v1/reports/export", s.handleReportsExport)
@@ -297,9 +298,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/scans/{id}/meta", s.handleUpdateScanMeta)
 	mux.HandleFunc("GET /api/v1/scans/{id}/evidence-pack", s.handleEvidencePack)
 	mux.HandleFunc("GET /api/v1/scans/{id}/score", s.handleScanScore)
+	mux.HandleFunc("GET /api/v1/scans/{id}/compliance-posture", s.handleScanCompliancePosture)
 	mux.HandleFunc("GET /api/v1/scans/{id}/policy", s.handleScanPolicy)
 	mux.HandleFunc("GET /api/v1/scans/{id}/reuse", s.handleCredentialReuse)
 	mux.HandleFunc("GET /api/v1/estate", s.handleEstate)
+	mux.HandleFunc("GET /api/v1/estate/blast-radius", s.handleEstateBlastRadius)
 	mux.HandleFunc("GET /api/v1/policy", s.handleGetPolicy)
 	mux.HandleFunc("PUT /api/v1/policy", s.handlePutPolicy)
 	mux.HandleFunc("GET /api/v1/settings/siem", s.handleGetSIEM)
@@ -309,13 +312,49 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/engagements", s.handleListEngagements)
 	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
 	mux.HandleFunc("GET /api/v1/playbooks/{check_id}", s.handleGetPlaybook)
+	mux.HandleFunc("GET /api/v1/playbooks/{check_id}/script", s.handleGetPlaybookScript)
 	mux.HandleFunc("POST /api/v1/findings/bulk-triage", s.handleBulkTriage)
 	mux.HandleFunc("GET /api/v1/host-notes", s.handleListHostNotes)
 	mux.HandleFunc("PUT /api/v1/host-notes", s.handleUpsertHostNote)
 	mux.HandleFunc("DELETE /api/v1/host-notes/{id}", s.handleDeleteHostNote)
 	mux.HandleFunc("GET /api/v1/settings/alerts", s.handleGetAlertRules)
 	mux.HandleFunc("PUT /api/v1/settings/alerts", s.handlePutAlertRules)
+	mux.HandleFunc("GET /api/v1/hosts/connect.rdp", s.handleDownloadRDPConfig)
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
+
+	// ── Phase 1: BloodHound CE JSON Export ───────────────────────────────────
+	mux.HandleFunc("GET /api/v1/estate/bloodhound.json", s.handleBloodHoundExport)
+
+	// ── Phase 2: Smart Spray status ──────────────────────────────────────────
+	mux.HandleFunc("GET /api/v1/scans/{id}/spray/status", s.handleSmartSprayStatus)
+
+	// ── Phase 3: MITRE ATT&CK Heatmap ────────────────────────────────────────
+	mux.HandleFunc("GET /api/v1/scans/{id}/mitre", s.handleMITREHeatmap)
+	mux.HandleFunc("GET /api/v1/mitre", s.handleMITREEngagement)
+	mux.HandleFunc("GET /mitre", s.handleMITREPage)
+
+	// ── Phase 4: AI Executive Summary ────────────────────────────────────────
+	mux.HandleFunc("GET /api/v1/settings/ai", s.handleGetAIConfig)
+	mux.HandleFunc("PUT /api/v1/settings/ai", s.handlePutAIConfig)
+	mux.HandleFunc("POST /api/v1/scans/{id}/ai-summary", s.handleGenerateAISummary)
+	mux.HandleFunc("GET /api/v1/scans/{id}/ai-summary", s.handleGetAISummary)
+
+	// ── Phase 5: SARIF Export ─────────────────────────────────────────────────
+	mux.HandleFunc("GET /api/v1/scans/{id}/sarif", s.handleSARIFExport)
+
+	// ── Phase 6: DSL Query ────────────────────────────────────────────────────
+	mux.HandleFunc("GET /api/v1/scans/{id}/hosts/search", s.handleDSLHosts)
+
+	// ── Phase 7: MTTR & Weekly Trend ──────────────────────────────────────────
+	mux.HandleFunc("GET /api/v1/mttr", s.handleMTTR)
+	mux.HandleFunc("GET /api/v1/trend/weekly", s.handleWeeklyTrend)
+
+	// ── Phase 8: Decoy / Honeypot Listener ───────────────────────────────────
+	mux.HandleFunc("POST /api/v1/decoy/start", s.handleDecoyStart)
+	mux.HandleFunc("POST /api/v1/decoy/stop", s.handleDecoyStop)
+	mux.HandleFunc("GET /api/v1/decoy/status", s.handleDecoyStatus)
+	mux.HandleFunc("GET /api/v1/decoy/events", s.handleDecoyEvents)
+	mux.HandleFunc("GET /decoy", s.handleDecoyPage)
 
 	// Catch-all: unknown paths render the small HTML error page (or JSON when
 	// under /api/), so the UI never falls through to net/http's plain text.

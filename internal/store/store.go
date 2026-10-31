@@ -23,7 +23,7 @@ import (
 var ErrScanNotFound = errors.New("store: scan not found")
 
 // schemaVersion is the current on-disk schema revision.
-const schemaVersion = 5
+const schemaVersion = 6
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS scans (
@@ -227,6 +227,9 @@ func (s *Store) migrate() error {
 	if err := s.migrateToV5(); err != nil {
 		return err
 	}
+	if err := s.migrateToV6(); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("store: update schema version: %w", err)
 	}
@@ -256,6 +259,26 @@ CREATE INDEX IF NOT EXISTS idx_auth_attempts_scan ON auth_attempts(scan_id, atte
 `)
 	if err != nil {
 		return fmt.Errorf("store: migrate v5: %w", err)
+	}
+	return nil
+}
+
+// migrateToV6 adds decoy_events for the honeypot listener.
+func (s *Store) migrateToV6() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS decoy_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  remote_addr TEXT NOT NULL,
+  remote_ip TEXT NOT NULL,
+  ntlm_username TEXT NOT NULL DEFAULT '',
+  ntlm_domain TEXT NOT NULL DEFAULT '',
+  raw TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_decoy_events_at ON decoy_events(at);
+`)
+	if err != nil {
+		return fmt.Errorf("store: migrate v6: %w", err)
 	}
 	return nil
 }
@@ -885,6 +908,30 @@ func (s *Store) InsertScreenshot(sc model.Screenshot) (int64, error) {
 		return 0, fmt.Errorf("store: insert screenshot: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// GetScreenshot fetches one screenshot by id.
+func (s *Store) GetScreenshot(id int64) (model.Screenshot, error) {
+	row := s.db.QueryRow(
+		`SELECT id, scan_id, host_id, address, port, username, file_path, width, height, captured_at
+		 FROM screenshots WHERE id = ?`, id)
+	var (
+		sc         model.Screenshot
+		port       int
+		username   sql.NullString
+		capturedAt string
+	)
+	if err := row.Scan(&sc.ID, &sc.ScanID, &sc.HostID, &sc.Address, &port, &username,
+		&sc.FilePath, &sc.Width, &sc.Height, &capturedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Screenshot{}, ErrNotFound
+		}
+		return model.Screenshot{}, fmt.Errorf("store: get screenshot: %w", err)
+	}
+	sc.Port = uint16(port)
+	sc.Username = username.String
+	sc.CapturedAt = parseTime(capturedAt)
+	return sc, nil
 }
 
 // ListScreenshots returns screenshot metadata of a scan, newest first.

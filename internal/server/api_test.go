@@ -1122,3 +1122,134 @@ func TestCreateScanWithNmapXMLUpload(t *testing.T) {
 		t.Fatalf("scan targets = %v, want [10.42.0.1:3389]", scan.Options.Targets)
 	}
 }
+
+func TestDownloadRDPConfig(t *testing.T) {
+	env := newTestEnv(t, Config{})
+
+	// Missing address -> 400
+	resp := get(t, env.http.URL+"/api/v1/hosts/connect.rdp")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+
+	// Valid address, port, user
+	resp = get(t, env.http.URL+"/api/v1/hosts/connect.rdp?address=172.16.3.128&port=3389&user=cmk&domain=CORP")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/x-rdp" {
+		t.Fatalf("content-type = %s, want application/x-rdp", ct)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "full address:s:172.16.3.128:3389") {
+		t.Fatalf("body missing full address: %s", body)
+	}
+	if !strings.Contains(body, "username:s:CORP\\cmk") {
+		t.Fatalf("body missing username: %s", body)
+	}
+	if !strings.Contains(body, "enablecredsspsupport:i:1") {
+		t.Fatalf("body missing enablecredsspsupport: %s", body)
+	}
+}
+
+func TestPlaybookScriptAPI(t *testing.T) {
+	env := newTestEnv(t, Config{})
+
+	// 404 for unknown check
+	resp := get(t, env.http.URL+"/api/v1/playbooks/unknown-check-id/script")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+
+	// JSON format (all scripts)
+	resp = get(t, env.http.URL+"/api/v1/playbooks/nla-not-required/script")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "powershell") || !strings.Contains(body, "UserAuthentication") {
+		t.Fatalf("unexpected body: %s", body)
+	}
+
+	// PowerShell format plain text
+	resp = get(t, env.http.URL+"/api/v1/playbooks/nla-not-required/script?format=powershell")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body = readBody(t, resp)
+	if !strings.Contains(body, "UserAuthentication") {
+		t.Fatalf("powershell body missing UserAuthentication: %s", body)
+	}
+
+	// Ansible format
+	resp = get(t, env.http.URL+"/api/v1/playbooks/nla-not-required/script?format=ansible")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body = readBody(t, resp)
+	if !strings.Contains(body, "ansible.windows.win_regedit") {
+		t.Fatalf("ansible body missing win_regedit: %s", body)
+	}
+}
+
+func TestCompliancePostureAPI(t *testing.T) {
+	env := newTestEnv(t, Config{})
+
+	// "all" scans posture
+	resp := get(t, env.http.URL+"/api/v1/scans/all/compliance-posture")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "CIS") || !strings.Contains(body, "PCI-DSS") || !strings.Contains(body, "overall_score") {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestBlastRadiusAPI(t *testing.T) {
+	env := newTestEnv(t, Config{})
+
+	resp := get(t, env.http.URL+"/api/v1/estate/blast-radius")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "nodes") || !strings.Contains(body, "edges") {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestInspectScreenshotAPI(t *testing.T) {
+	env := newTestEnv(t, Config{})
+
+	// 404 for unknown screenshot
+	resp := get(t, env.http.URL+"/api/v1/screenshots/99999/inspect")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+
+	// Insert test screenshot into store
+	shotID, err := env.store.InsertScreenshot(model.Screenshot{
+		ScanID:     "s1",
+		HostID:     1,
+		Address:    "172.16.3.128",
+		Port:       3389,
+		Username:   "Administrator",
+		FilePath:   "/outputs/screenshots/172.16.3.128_3389_admin.png",
+		Width:      1280,
+		Height:     800,
+		CapturedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("insert screenshot: %v", err)
+	}
+
+	resp = get(t, env.http.URL+"/api/v1/screenshots/"+strconv.FormatInt(shotID, 10)+"/inspect")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "is_sensitive") || !strings.Contains(body, "bounding_boxes") || !strings.Contains(body, "keywords") {
+		t.Fatalf("unexpected inspect body: %s", body)
+	}
+}

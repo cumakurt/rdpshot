@@ -102,3 +102,176 @@ func portStr(p uint16) string {
 	}
 	return string(b[i:])
 }
+
+// BlastNodeType classifies entities in the attack topology.
+type BlastNodeType string
+
+const (
+	BlastNodeCredential BlastNodeType = "credential"
+	BlastNodeHost       BlastNodeType = "host"
+	BlastNodeVuln       BlastNodeType = "vulnerability"
+)
+
+// BlastRadiusNode is a node in the credential blast radius / attack graph.
+type BlastRadiusNode struct {
+	ID          string        `json:"id"`
+	Label       string        `json:"label"`
+	Type        BlastNodeType `json:"type"`
+	RiskScore   float64       `json:"risk_score"`
+	Severity    string        `json:"severity,omitempty"`
+	Address     string        `json:"address,omitempty"`
+	Port        uint16        `json:"port,omitempty"`
+	Domain      string        `json:"domain,omitempty"`
+	Username    string        `json:"username,omitempty"`
+	Hardening   int           `json:"hardening_score,omitempty"`
+	NLARequired bool          `json:"nla_required,omitempty"`
+}
+
+// BlastRadiusEdge connects credential access, vulnerability pivots, or lateral relations.
+type BlastRadiusEdge struct {
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	Relation string `json:"relation"` // "compromised_by", "exposed_via", "lateral_pivot"
+	Label    string `json:"label,omitempty"`
+	Weight   int    `json:"weight"`
+}
+
+// BlastRadiusGraph is the payload for the interactive attack graph.
+type BlastRadiusGraph struct {
+	Engagement  string            `json:"engagement,omitempty"`
+	Nodes       []BlastRadiusNode `json:"nodes"`
+	Edges       []BlastRadiusEdge `json:"edges"`
+	TotalPivots int               `json:"total_pivots"`
+}
+
+// BuildBlastRadius maps verified credentials, hosts, and exploitable flaws into an attack path graph.
+func BuildBlastRadius(engagement string, hosts []model.Host, creds []model.Credential, findings []model.Finding) BlastRadiusGraph {
+	g := BlastRadiusGraph{Engagement: engagement}
+
+	findingByHost := map[string][]model.Finding{}
+	for _, f := range findings {
+		key := f.Address + ":" + portStr(f.Port)
+		findingByHost[key] = append(findingByHost[key], f)
+	}
+
+	seenNodes := map[string]bool{}
+	openHosts := make([]model.Host, 0)
+	hostKeySet := map[string]bool{}
+
+	for _, h := range hosts {
+		if h.State != "open" {
+			continue
+		}
+		key := h.Endpoint.Address + ":" + portStr(h.Endpoint.Port)
+		if hostKeySet[key] {
+			continue
+		}
+		hostKeySet[key] = true
+		openHosts = append(openHosts, h)
+
+		hs := score.EvaluateHost(h, findingByHost[key])
+		nla := false
+		if h.Service != nil {
+			nla = h.Service.NLARequired
+		}
+
+		nodeID := "host:" + key
+		g.Nodes = append(g.Nodes, BlastRadiusNode{
+			ID:          nodeID,
+			Label:       key,
+			Type:        BlastNodeHost,
+			Address:     h.Endpoint.Address,
+			Port:        h.Endpoint.Port,
+			Hardening:   hs.Score,
+			NLARequired: nla,
+		})
+		seenNodes[nodeID] = true
+
+		// Check for critical / high vulnerabilities that enable pivots
+		for _, f := range findingByHost[key] {
+			if f.Status != model.FindingVulnerable && f.Status != model.FindingPotential {
+				continue
+			}
+			if f.Severity == model.SeverityCritical || f.Severity == model.SeverityHigh || f.CheckID == "bluekeep-cve-2019-0708" {
+				vulnNodeID := "vuln:" + f.CheckID
+				if !seenNodes[vulnNodeID] {
+					seenNodes[vulnNodeID] = true
+					g.Nodes = append(g.Nodes, BlastRadiusNode{
+						ID:        vulnNodeID,
+						Label:     f.Title,
+						Type:      BlastNodeVuln,
+						Severity:  string(f.Severity),
+						RiskScore: float64(f.Severity.Rank()),
+					})
+				}
+				g.Edges = append(g.Edges, BlastRadiusEdge{
+					Source:   vulnNodeID,
+					Target:   nodeID,
+					Relation: "exposed_via",
+					Label:    string(f.Severity) + " pivot",
+					Weight:   f.Severity.Rank(),
+				})
+			}
+		}
+	}
+
+	// Add Credential nodes and connect to compromised hosts
+	credHosts := map[string][]string{} // credID -> []hostKey
+	for _, c := range creds {
+		userLabel := c.Username
+		if c.Domain != "" {
+			userLabel = c.Domain + `\` + c.Username
+		}
+		credNodeID := "cred:" + userLabel
+		if !seenNodes[credNodeID] {
+			seenNodes[credNodeID] = true
+			g.Nodes = append(g.Nodes, BlastRadiusNode{
+				ID:        credNodeID,
+				Label:     userLabel,
+				Type:      BlastNodeCredential,
+				Username:  c.Username,
+				Domain:    c.Domain,
+				RiskScore: 10.0,
+			})
+		}
+
+		targetHostKey := c.Address + ":" + portStr(c.Port)
+		targetHostNodeID := "host:" + targetHostKey
+
+		if seenNodes[targetHostNodeID] {
+			credHosts[credNodeID] = append(credHosts[credNodeID], targetHostNodeID)
+			g.Edges = append(g.Edges, BlastRadiusEdge{
+				Source:   credNodeID,
+				Target:   targetHostNodeID,
+				Relation: "compromised_by",
+				Label:    "Verified (" + c.Method + ")",
+				Weight:   10,
+			})
+		}
+	}
+
+	// Lateral movement blast radius:
+	// If a credential is compromised on a domain, other hosts in the same domain or subnet are potential lateral targets!
+	for credNodeID, compromisedHostIDs := range credHosts {
+		for _, compHostID := range compromisedHostIDs {
+			for _, otherHost := range openHosts {
+				otherKey := "host:" + otherHost.Endpoint.Address + ":" + portStr(otherHost.Endpoint.Port)
+				if otherKey == compHostID {
+					continue
+				}
+				// Same subnet or same domain
+				g.Edges = append(g.Edges, BlastRadiusEdge{
+					Source:   compHostID,
+					Target:   otherKey,
+					Relation: "lateral_pivot",
+					Label:    "Lateral Target",
+					Weight:   5,
+				})
+			}
+		}
+		_ = credNodeID
+	}
+
+	g.TotalPivots = len(g.Edges)
+	return g
+}

@@ -291,13 +291,29 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="card-head">
-              <h2 class="card-title">Live Findings</h2>
-              <span class="badge badge-slate" data-live-finding-count>0</span>
+          <div class="card" id="live-terminal-card">
+            <div class="card-head flex-wrap gap-2">
+              <div class="flex items-center gap-2">
+                <h2 class="card-title">Live Terminal &amp; Events</h2>
+                <span class="badge badge-slate" data-live-finding-count>0</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button type="button" id="toggle-audio-alerts" class="btn btn-ghost btn-xs text-xs" data-audio-enabled="false" title="Play subtle chime on critical finding or verified credential">
+                  <span id="audio-alert-icon">🔇</span> <span id="audio-alert-label">Audio Alerts</span>
+                </button>
+              </div>
             </div>
             <div class="card-body">
-              <ul id="live-findings" class="space-y-2" aria-live="polite">
+              <div class="flex items-center justify-between gap-2 mb-3 flex-wrap">
+                <div class="flex items-center gap-1" role="tablist">
+                  <button type="button" class="btn btn-ghost btn-xs is-active" data-terminal-filter="all">All</button>
+                  <button type="button" class="btn btn-ghost btn-xs" data-terminal-filter="critical">Critical</button>
+                  <button type="button" class="btn btn-ghost btn-xs" data-terminal-filter="credential">Credentials</button>
+                  <button type="button" class="btn btn-ghost btn-xs" data-terminal-filter="screenshot">Screenshots</button>
+                </div>
+                <input type="search" id="terminal-search" class="input input-sm text-xs py-1" placeholder="Filter live stream…" style="max-width:11rem" aria-label="Filter events">
+              </div>
+              <ul id="live-findings" class="space-y-2 max-h-80 overflow-y-auto" aria-live="polite">
                 <li class="live-empty" data-live-empty>No findings yet. New detections appear here in real time.</li>
               </ul>
             </div>

@@ -2,12 +2,17 @@
 
 `rdpshot` is a single-binary RDP security-audit platform for authorized
 penetration tests and internal audits. It discovers Remote Desktop services,
-fingerprinting the RDP negotiation, TLS and certificate posture of every
+fingerprints the RDP negotiation, TLS and certificate posture of every
 endpoint, runs a catalog of configuration and vulnerability checks (including a
 safe BlueKeep detection probe), and — only with explicit authorization — audits
 credentials and captures session screenshots. Results are stored in SQLite and
 rendered as HTML, CSV or PDF reports, either from the CLI or from the bundled
 web UI.
+
+Beyond traditional scanning, rdpshot ships a full **Red Team & ASM toolkit**:
+BloodHound CE export, MITRE ATT&CK heatmap, AI-powered executive summaries,
+SARIF export for CI/CD pipelines, a DSL query language, MTTR trend analytics,
+and a built-in RDP honeypot/decoy listener.
 
 > ## ⚠️ Legal / authorized-use warning
 >
@@ -30,6 +35,7 @@ web UI.
 
 ## Features
 
+### Core Scanning & Reconnaissance
 * **Target handling** — IP, CIDR, hostname, `host:port` and `@file` target
   specifications, port lists and ranges, blacklist, hard expansion limits.
 * **Reconnaissance** — TCP connect with RDP negotiation analysis (X.224 /
@@ -47,74 +53,93 @@ web UI.
   attempt timelines and stop reasons are persisted without secrets. OCR
   login-tile usernames are quality-gated and prepended into the same-scan
   wordlist for NLA hosts.
-* **Session screenshots** — when login fails or is skipped, rdpshot tries a
-  pre-auth **login-screen** capture over TLS (`xfreerdp /sec:tls` under Xvfb).
-  If Winlogon is unreachable (NLA/HYBRID required), no synthetic detection PNG
-  is stored — the gallery only shows real frames. Optional `tesseract` OCR
-  extracts Winlogon account tiles into `login_users`. Live desktop capture
-  remains opt-in / post-login: FreeRDP when available, else pure-Go NLA bitmap
-  framebuffer with `[MS-RDPEGFX]` DVC channel support, else a verified-login evidence card.
+* **Session screenshots** — pre-auth login-screen capture over TLS; optional
+  post-auth desktop capture via FreeRDP or pure-Go NLA bitmap framebuffer.
 * **Compliance mapping** — findings mapped against **CIS Benchmarks**, **PCI-DSS 4.0**,
   **NIST SP 800-53**, and **ISO 27001**, rendered in executive HTML, CSV, and PDF reports.
-* **Cryptographic & TLS posture** — proactive probe for TLS 1.0, 1.1, 1.2, 1.3
-  and legacy/weak cipher suites (RC4, 3DES/Sweet32, CBC).
-* **Nmap & Masscan import** — import RDP targets directly from Nmap XML (`-oX`)
-  or Masscan outputs via `--import-nmap` / `--import-file` and web UI upload.
-* **MFA & PAM heuristics** — passive detection of Duo Security, CyberArk PSM,
-  and Entra ID (Azure AD) pre-auth mechanisms (`mfa-enforced`, `pam-proxy-detected`).
-* **MS-RDPEUDP discovery** — UDP/3389 transport acceleration probing via `--enable-udp`.
-* **Pass-the-Ticket (Kerberos / CCache)** — inject external Kerberos credentials
-  cache (`.ccache`) via `--auth-ccache` without plaintext passwords or hashes.
-* **Executive delta comparison PDF** — one-pager comparison report between two audits
-  (`rdpshot report --compare <scan-id> --format pdf`).
-* **Dark / Light theme** — Command Center (Dark) and Corporate Clean (Light) themes
-  with persistent local storage state.
-* **RDP honeypot & deception detection** — anomalous handshake and response timing
-  signatures for identifying deception traps (`rdp-honeypot-detected`).
-* **RDP downgrade & MitM check** — detects servers accepting unauthenticated fallback
-  when NLA is omitted (`rdp-nla-downgrade-vulnerable`).
-* **Session shadowing posture** — audits unprompted admin shadowing policies
-  (`rdp-shadow-unprompted-exposed`).
-* **Corporate SOAR & Webhooks** — instant alert webhook notifications for Slack,
-  MS Teams, Discord, or generic JSON endpoints (`--webhook-url`, `--webhook-level`).
-* **Active Directory / LDAP auto-discovery** — queries domain controllers for Windows
-  servers and RDP SPNs (`--ad-server`, `--ad-domain`, `--ad-user`, `--ad-pass`).
-* **Hardening score** — 0–100 compliance score (NLA, TLS, cert, crypto, criticals).
-* **Executive one-pager** — HTML/PDF summary includes NLA coverage %, auth audit
-  outcomes, and open finding counts; compare shows remediated burn-down and
-  hardening score delta.
-* **Estate map** — `/estate` risk graph of hosts and findings per engagement.
-* **Client-trust checks** — certificate hostname/SAN mismatch and cipher posture.
-* **RD Web / Gateway / UDP discovery** — optional detection-only alternate paths.
-* **Smart credential audit** — high-risk host priority and verified-credential reuse.
-* **Delta retest** — `base_scan_id` limits work to new/changed/open-triage hosts.
-* **Policy-as-code** — declarative pass/fail gate (`GET/PUT /api/v1/policy`) and CI CLI (`rdpshot policy check`).
-* **Engagement workspace** — `/engagements` portal for scope freeze, host notes, and evidence shortcuts.
-* **Remediation playbooks** — static `check_id` guides via `/api/v1/playbooks`.
-* **Scan queue** — `--max-concurrent-scans` (default 2) keeps excess jobs pending; optional `max_runtime_sec`.
-* **Alert rules / SLA** — critical, high, NLA regression, credential-reuse, open-triage
-  critical, and minimum hardening-score floor webhooks on scan finish.
-* **Path posture** — label scans `internal`/`external` for dual-homed compare.
-* **Framebuffer deepen** — Fast-Path updates plus PATBLT/SCRBLT/MEMBLT orders and MS-RDPEGFX surface decode.
-* **Kerberos offer** — CredSSP advertises Kerberos when a usable ccache/keytab is present.
+
+### 🩸 Red Team & Offensive Features
+* **BloodHound CE JSON Export** — converts Blast Radius data (verified
+  credentials, open hosts, BlueKeep exploitability) into a BloodHound
+  Community Edition v5 `.json` file. Drag-and-drop into BloodHound to
+  visualise CanRDP, HasSession, AdminTo and lateral movement paths.
+  `GET /api/v1/estate/bloodhound.json`
+* **Smart Password Spray Engine** — domain-aware Low & Slow spraying with
+  per-account failure counters, configurable observation window and lockout
+  duration, automatic cooldown queuing, and a global failure kill-switch.
+  Modes: `low_slow` (one password per round across all accounts) and
+  `aggressive`. `internal/spray` package.
+* **Pass-the-Hash / Pass-the-Ticket** — NT hash and Kerberos ccache auth
+  modes without requiring cleartext passwords.
+* **Session Hijack Inspector** — detects unprompted RDP session shadowing
+  (`rdp-shadow-unprompted-exposed`) and surfaces it on the MITRE heatmap as
+  T1563.002.
+
+### 🎯 Blue Team, CISO & Compliance Features
+* **MITRE ATT&CK Heatmap** — maps scan findings and verified credentials to
+  8 RDP-relevant ATT&CK techniques (T1021.001, T1110.003, T1078, T1563.002,
+  T1046, T1557, T1040, T1190). Each technique shows `detected`, `mitigated`,
+  `potential`, or `not_applicable` status with evidence. Available at `/mitre`.
+  `GET /api/v1/scans/{id}/mitre`
+* **AI Executive Summary** — generates a professional 3–4 paragraph executive
+  summary from scan data using Ollama (local), OpenAI, Anthropic Claude, or
+  Google Gemini. Falls back to a deterministic template when no LLM is
+  configured. EN and TR language support.
+  `POST /api/v1/scans/{id}/ai-summary`
+* **SARIF 2.1.0 Export** — exports findings in Static Analysis Results
+  Interchange Format for GitHub Advanced Security, GitLab SAST, and any
+  SARIF-aware CI/CD pipeline. The `?fail_on_critical=true` query parameter
+  returns HTTP 422 when critical findings exist, acting as a hard CI/CD gate.
+  `GET /api/v1/scans/{id}/sarif`
+* **Compliance Radar** — CIS, PCI-DSS, NIST, ISO-27001 spider chart.
+* **Policy-as-code** — declarative pass/fail gate and CI CLI (`rdpshot policy check`).
 * **SIEM streaming** — JSON or CEF webhook on scan completion.
-* **Engagement packs** — evidence ZIP includes `manifest.json` with SHA-256 hashes.
-* **Scan compare** — diff hosts and findings between two audits.
-* **Finding triage** — open / confirmed / false positive / remediated workflow.
-* **Engagements & tags** — label scans for client/scope filtering and trends.
-* **Schedules** — pick an exact first-run date/time, then interval or five-field cron cadence with optional webhooks.
-* **Evidence pack v2** — ZIP export of HTML/CSV/PDF, hosts/findings/auth_attempts
-  JSON, masked credentials, screenshots (no synthetic rdp-open), PACK_README, and
-  SHA-256 `manifest.json`.
-* **Trend / baseline** — posture time series across completed scans.
-* **Local users & audit log** — optional portal accounts with role-aware sessions.
-* **Named wordlist sets** and report branding metadata.
-* **Persistence** — SQLite (pure Go, no CGO) for scans, hosts, findings,
-  credentials and screenshot metadata.
-* **Reporting** — self-contained HTML report, SIEM-friendly CSV, management
-  PDF with branding fields.
-* **Web UI + REST API** — dashboard, live scan progress (SSE), scan history,
-  findings, screenshot gallery, report center, bearer-token protection.
+
+### 🔍 Operator Experience & Search
+* **DSL Query Language** — filter hosts and findings with a concise query
+  syntax: `nla:false tls:1.0`, `severity:critical creds:true`,
+  `cve:CVE-2019-0708 state:open`. Supported fields: `nla`, `tls`, `port`,
+  `state`, `creds`, `severity`, `cve`, `os`, `grade`.
+  `GET /api/v1/scans/{id}/hosts/search?q=...`
+* **MTTR & Security Velocity** — mean and median days-to-remediate, open
+  critical/high counts, remediation rate, new hosts in the last 7 days.
+  Weekly new-vs-remediated trend charts. `GET /api/v1/mttr`
+* **Kanban Triage Board** — drag-and-drop finding workflow (Open → Confirmed
+  → False Positive → Remediated).
+* **Remediation Playbooks** — one-click PowerShell, Registry, Ansible, and
+  Bash fix scripts per finding. `GET /api/v1/playbooks/{check_id}/script`
+* **Estate Map** — risk scatter and Blast Radius attack-path SVG graph.
+* **Delta retest** — `base_scan_id` limits work to new/changed/open-triage hosts.
+* **Engagement workspace** — scope freeze, host notes, evidence packs with
+  SHA-256 manifest.
+
+### 🪤 Active Defense
+* **Decoy / Honeypot Listener** — simulates a vulnerable Windows RDP server
+  on a configurable port. Every connection: completes HYBRID negotiation,
+  upgrades to TLS, parses the attacker's NTLM Negotiate blob to extract
+  username/domain, fires a critical webhook alert, persists a `DecoyEvent`
+  to SQLite, and writes to the audit log. No credentials are ever returned
+  to the attacker.
+  CLI: `rdpshot listen --bind 0.0.0.0:13389 --notify-webhook https://...`
+  REST: `POST /api/v1/decoy/start`, `GET /api/v1/decoy/events`
+  Web UI: `/decoy`
+
+### Infrastructure & Platform
+* **Zero heavy runtime** — no Node.js/NPM build chain; pure Go stdlib +
+  Tailwind CDN + Chart.js + Vanilla JS.
+* **Cryptographic & TLS posture** — proactive probe for TLS 1.0/1.1/1.2/1.3
+  and legacy/weak cipher suites (RC4, 3DES/Sweet32, CBC).
+* **Nmap & Masscan import** — import RDP targets directly from Nmap XML
+  (`-oX`) or Masscan outputs via `--import-nmap` / `--import-file`.
+* **MFA & PAM heuristics** — passive detection of Duo Security, CyberArk PSM,
+  and Entra ID (Azure AD) pre-auth mechanisms.
+* **Corporate SOAR & Webhooks** — instant alert webhook notifications for
+  Slack, MS Teams, Discord, or generic JSON endpoints.
+* **Active Directory / LDAP auto-discovery** — queries domain controllers for
+  Windows servers and RDP SPNs.
+* **Schedules** — five-field cron or interval cadence with optional webhooks.
+* **Dark / Light theme** — Command Center (Dark) and Corporate Clean (Light).
+* **Persistence** — SQLite (pure Go, no CGO), schema v6.
 
 ## UI screenshots
 
@@ -166,33 +191,40 @@ Exact first-run date/time picker plus interval or cron cadence.
 
 | Package | Responsibility |
 |---|---|
-| `cmd/rdpshot` | CLI entrypoint: `scan`, `serve`, `report`, `targets`, `version` |
+| `cmd/rdpshot` | CLI entrypoint: `scan`, `serve`, `report`, `targets`, `listen`, `version` |
 | `internal/about` | Product identity and developer credits shared by CLI, UI and reports |
 | `internal/alerts` | Finding and scan completion alert evaluator |
-| `internal/cronexpr` | Five-field cron parser for schedule cadence |
-| `internal/notify` | Outbound SOAR webhook notifications (Slack, Teams, Discord, JSON) |
-| `internal/kerberos` | Kerberos CCache file parsing and pass-the-ticket injection |
-| `internal/model` | Shared domain types (Scan, Host, Finding, Credential, Screenshot, Event, ...) |
-| `internal/config` | Configuration resolution: defaults, JSON file, `RDSHOT_*` env, flags |
-| `internal/target` | Target spec parsing and expansion (IP, CIDR, hostname, `@file`, blacklist) |
-| `internal/rdp` | RDP protocol stack: TPKT/COTP, X.224 + RDP_NEG, MCS/GCC, TLS info, safe probes |
-| `internal/vuln` | Vulnerability check catalog and finding evaluation |
-| `internal/scanner` | Scan engine: worker pool, rate limiter, stage orchestration |
+| `internal/aisummary` | AI executive summary — Ollama, OpenAI, Anthropic, Gemini + template fallback |
+| `internal/bloodhound` | BloodHound CE v5 JSON export builder (Computer/User nodes, CanRDP/HasSession edges) |
 | `internal/brute` | Bounded, fail-safe credential-audit engine and wordlist handling |
-| `internal/ntlm` | NTLMv2 message construction and parsing |
+| `internal/config` | Configuration resolution: defaults, JSON file, `RDSHOT_*` env, flags |
 | `internal/credssp` | CredSSP/SPNEGO/TSRequest encoding for NLA authentication |
-| `internal/auth` | RDP NLA authentication with classified error outcomes |
-| `internal/screenshot` | Auto grabber: FreeRDP → Go bitmap framebuffer → evidence card |
-| `internal/score` | Hardening / compliance scoring |
-| `internal/estate` | Attack-surface graph builder |
-| `internal/policy` | Declarative hardening policy evaluation |
-| `internal/siem` | JSON/CEF event formatting and delivery |
+| `internal/cronexpr` | Five-field cron parser for schedule cadence |
+| `internal/decoy` | Decoy/honeypot RDP listener — fake HYBRID negotiation, NTLM parse, DecoyEvent |
 | `internal/discovery` | RD Web / Gateway / UDP detection probes |
+| `internal/dsl` | DSL query language parser and host filter (`nla:false tls:1.0 severity:critical`) |
 | `internal/engagement` | Evidence manifest hashing and scope freeze |
-| `internal/store` | SQLite persistence and aggregate queries |
+| `internal/estate` | Attack-surface graph builder and Blast Radius graph |
 | `internal/events` | Bounded publish/subscribe hub for live events (SSE) |
+| `internal/kerberos` | Kerberos CCache file parsing and pass-the-ticket injection |
+| `internal/mitre` | MITRE ATT&CK heatmap — 8 RDP techniques mapped to scan findings |
+| `internal/model` | Shared domain types (Scan, Host, Finding, Credential, Screenshot, Event, …) |
+| `internal/notify` | Outbound SOAR webhook notifications (Slack, Teams, Discord, JSON) |
+| `internal/ntlm` | NTLMv2 message construction and parsing |
+| `internal/playbook` | Remediation script catalog (PowerShell, Registry, Ansible, Bash) |
+| `internal/policy` | Declarative hardening policy evaluation |
+| `internal/rdp` | RDP protocol stack: TPKT/COTP, X.224 + RDP_NEG, MCS/GCC, TLS info, safe probes |
 | `internal/reporter` | HTML, CSV and PDF report rendering |
-| `internal/server` | REST API and web UI (`web/templates`, `web/static`) |
+| `internal/sarif` | SARIF 2.1.0 export builder — GitHub Advanced Security / GitLab SAST compatible |
+| `internal/scanner` | Scan engine: worker pool, rate limiter, stage orchestration |
+| `internal/score` | Hardening / compliance scoring (A–F grade, CIS/PCI/NIST/ISO-27001 radar) |
+| `internal/screenshot` | Auto grabber: FreeRDP → Go bitmap framebuffer → evidence card |
+| `internal/siem` | JSON/CEF event formatting and delivery |
+| `internal/spray` | Smart password spray engine — Low&Slow mode, per-account cooldown, lockout tracker |
+| `internal/store` | SQLite persistence, aggregate queries, MTTR computation, decoy event store |
+| `internal/target` | Target spec parsing and expansion (IP, CIDR, hostname, `@file`, blacklist) |
+| `internal/vuln` | Vulnerability check catalog and finding evaluation |
+| `web/` | Embedded templates + static assets (Tailwind CDN, Chart.js, Vanilla JS) |
 
 ## Install
 
@@ -324,6 +356,7 @@ Flags must come before the target specifications. Targets are one or more of:
 | `report` | Render a stored scan into a report | `--scan <id>` (required), `--format html\|csv\|pdf`, `--compare <against-id>` (Executive Delta diff PDF), `-o/--output`, `--db` |
 | `policy check` | CI gate against a stored scan | `--scan <id>` (required), `--db`, `--policy path.json` (optional) |
 | `targets` | Resolve targets and print `address:port` lines | `--ports`, `--blacklist`, `--max-targets`, `--import-file/--import-nmap`, `--ad-server`, `--ad-domain`, `--ad-user`, `--ad-pass` |
+| `listen` | Start a decoy RDP honeypot listener | `--bind` (default `0.0.0.0:13389`), `--decoy-port`, `--notify-webhook <url>`, `--db`, `--log-level` |
 | `version` | Print `rdpshot <version>` | — |
 
 Progress and diagnostics go to stderr; results go to stdout. Exit codes:
@@ -387,11 +420,10 @@ resolved defaults.
 reachable beyond localhost, set `--token` (or `RDSHOT_TOKEN`): every route then
 requires `Authorization: Bearer <token>` or `?token=`.
 
-Web pages: `/` command-center dashboard, `/scans` scans dashboard (KPIs + inventory), `/scans/{id}` live scan detail,
+Web pages: `/` command-center dashboard, `/scans` scans dashboard, `/scans/{id}` live scan detail,
 `/compare` scan diff, `/engagements` workspace, `/schedules` recurring audits,
-`/gallery` screenshot gallery, `/reports` report center, `/about` developer
-credits. Screenshot images are served read-only under `/files/`. Every page
-footer shows the build version and developer attribution.
+`/gallery` screenshot gallery, `/reports` report center, `/mitre` ATT&CK heatmap,
+`/decoy` honeypot listener, `/about` developer credits.
 
 | Method | Route | Description |
 |---|---|---|
@@ -449,6 +481,21 @@ footer shows the build version and developer attribution.
 | `DELETE` | `/api/v1/users/{id}` | Delete a local user |
 | `GET` | `/api/v1/audit` | Recent audit log entries |
 | `GET` | `/api/v1/events` | Live event stream (SSE, `?scan=` filters) |
+| `GET` | `/api/v1/estate/bloodhound.json` | **[NEW]** BloodHound CE v5 JSON export (`?engagement=` / `?scan_id=`) |
+| `GET/PUT` | `/api/v1/settings/ai` | **[NEW]** LLM config (Ollama/OpenAI/Anthropic/Gemini; API key redacted on GET) |
+| `GET` | `/api/v1/scans/{id}/mitre` | **[NEW]** MITRE ATT&CK heatmap for one scan |
+| `GET` | `/api/v1/mitre` | **[NEW]** MITRE heatmap across an engagement (`?engagement=`) |
+| `POST` | `/api/v1/scans/{id}/ai-summary` | **[NEW]** Generate AI executive summary (cached) |
+| `GET` | `/api/v1/scans/{id}/ai-summary` | **[NEW]** Retrieve cached executive summary |
+| `GET` | `/api/v1/scans/{id}/sarif` | **[NEW]** SARIF 2.1.0 export (`?fail_on_critical=true` for CI gate) |
+| `GET` | `/api/v1/scans/{id}/hosts/search` | **[NEW]** DSL host filter (`?q=nla:false+tls:1.0`) |
+| `GET` | `/api/v1/scans/{id}/spray/status` | **[NEW]** Smart spray per-account lockout counters |
+| `GET` | `/api/v1/mttr` | **[NEW]** Mean-Time-to-Remediate stats (`?engagement=&period=30d`) |
+| `GET` | `/api/v1/trend/weekly` | **[NEW]** Weekly new-vs-remediated finding trend buckets |
+| `POST` | `/api/v1/decoy/start` | **[NEW]** Start the honeypot/decoy listener |
+| `POST` | `/api/v1/decoy/stop` | **[NEW]** Stop the honeypot/decoy listener |
+| `GET` | `/api/v1/decoy/status` | **[NEW]** Decoy listener running status and event count |
+| `GET` | `/api/v1/decoy/events` | **[NEW]** Captured attacker connections (newest first) |
 
 ## Vulnerability checks
 

@@ -242,3 +242,149 @@ func itoa(v uint16) string {
 	}
 	return string(buf[i:])
 }
+
+// StandardPosture holds posture score and check summary for one regulatory benchmark.
+type StandardPosture struct {
+	Standard       string   `json:"standard"` // "CIS", "PCI-DSS", "NIST", "ISO-27001"
+	Score          int      `json:"score"`
+	Grade          string   `json:"grade"`
+	TotalChecks    int      `json:"total_checks"`
+	PassedChecks   int      `json:"passed_checks"`
+	FailedChecks   int      `json:"failed_checks"`
+	FailedCheckIDs []string `json:"failed_check_ids,omitempty"`
+}
+
+// CompliancePosture aggregates scores across standards for radar visualization.
+type CompliancePosture struct {
+	ScanID       string            `json:"scan_id"`
+	OverallScore int               `json:"overall_score"`
+	Grade        string            `json:"grade"`
+	Standards    []StandardPosture `json:"standards"`
+}
+
+type benchmarkRule struct {
+	checkID string
+	aliases []string
+	weight  int
+}
+
+// EvaluateCompliancePosture computes compliance percentages for CIS, PCI-DSS, NIST, and ISO-27001.
+func EvaluateCompliancePosture(scanID string, hosts []model.Host, findings []model.Finding) CompliancePosture {
+	benchmarks := []struct {
+		standard string
+		rules    []benchmarkRule
+	}{
+		{
+			standard: "CIS",
+			rules: []benchmarkRule{
+				{checkID: "nla-not-required", aliases: []string{"rdp-nla-downgrade-vulnerable"}, weight: 25},
+				{checkID: "rdp-security-without-tls", aliases: []string{"rdp-service-exposed"}, weight: 20},
+				{checkID: "weak-tls", aliases: []string{"tls-legacy-version", "tls-legacy-1.0-1.1"}, weight: 15},
+				{checkID: "weak-encryption", aliases: []string{"tls-weak-cipher"}, weight: 15},
+				{checkID: "self-signed-cert", aliases: []string{"expired-cert", "cert-hostname-mismatch"}, weight: 15},
+				{checkID: "rdp-shadow-unprompted-exposed", aliases: nil, weight: 10},
+			},
+		},
+		{
+			standard: "PCI-DSS",
+			rules: []benchmarkRule{
+				{checkID: "nla-not-required", aliases: []string{"rdp-nla-downgrade-vulnerable"}, weight: 30},
+				{checkID: "bluekeep-cve-2019-0708", aliases: nil, weight: 30},
+				{checkID: "weak-tls", aliases: []string{"tls-legacy-version", "tls-legacy-1.0-1.1"}, weight: 20},
+				{checkID: "weak-encryption", aliases: []string{"tls-weak-cipher"}, weight: 10},
+				{checkID: "self-signed-cert", aliases: []string{"expired-cert"}, weight: 10},
+			},
+		},
+		{
+			standard: "NIST",
+			rules: []benchmarkRule{
+				{checkID: "nla-not-required", aliases: []string{"rdp-nla-downgrade-vulnerable"}, weight: 25},
+				{checkID: "bluekeep-cve-2019-0708", aliases: nil, weight: 25},
+				{checkID: "rdp-security-without-tls", aliases: []string{"weak-tls"}, weight: 20},
+				{checkID: "rdp-shadow-unprompted-exposed", aliases: nil, weight: 15},
+				{checkID: "udp-3389-open", aliases: nil, weight: 15},
+			},
+		},
+		{
+			standard: "ISO-27001",
+			rules: []benchmarkRule{
+				{checkID: "nla-not-required", aliases: []string{"rdp-nla-downgrade-vulnerable"}, weight: 25},
+				{checkID: "bluekeep-cve-2019-0708", aliases: nil, weight: 25},
+				{checkID: "weak-tls", aliases: []string{"weak-encryption", "tls-weak-cipher"}, weight: 25},
+				{checkID: "rdp-security-without-tls", aliases: []string{"self-signed-cert"}, weight: 25},
+			},
+		},
+	}
+
+	activeFindings := map[string]bool{}
+	for _, f := range findings {
+		if f.Status == model.FindingVulnerable || f.Status == model.FindingPotential {
+			activeFindings[f.CheckID] = true
+		}
+	}
+
+	// Host-level inspections
+	hasOpenHost := false
+	for _, h := range hosts {
+		if h.State == "open" {
+			hasOpenHost = true
+			if h.Service != nil && !h.Service.NLARequired {
+				activeFindings["nla-not-required"] = true
+			}
+		}
+	}
+
+	out := CompliancePosture{
+		ScanID:    scanID,
+		Standards: make([]StandardPosture, 0, len(benchmarks)),
+	}
+
+	totalScore := 0
+	for _, b := range benchmarks {
+		sp := StandardPosture{
+			Standard:    b.standard,
+			TotalChecks: len(b.rules),
+		}
+		earnedWeight := 0
+		totalWeight := 0
+		for _, r := range b.rules {
+			totalWeight += r.weight
+			failed := activeFindings[r.checkID]
+			if !failed {
+				for _, alias := range r.aliases {
+					if activeFindings[alias] {
+						failed = true
+						break
+					}
+				}
+			}
+			if failed {
+				sp.FailedChecks++
+				sp.FailedCheckIDs = append(sp.FailedCheckIDs, r.checkID)
+			} else {
+				sp.PassedChecks++
+				earnedWeight += r.weight
+			}
+		}
+
+		if totalWeight > 0 {
+			sp.Score = (earnedWeight * 100) / totalWeight
+		} else {
+			sp.Score = 100
+		}
+		if !hasOpenHost && len(findings) == 0 {
+			sp.Score = 100
+		}
+		sp.Grade = grade(sp.Score)
+		totalScore += sp.Score
+		out.Standards = append(out.Standards, sp)
+	}
+
+	if len(out.Standards) > 0 {
+		out.OverallScore = totalScore / len(out.Standards)
+	} else {
+		out.OverallScore = 100
+	}
+	out.Grade = grade(out.OverallScore)
+	return out
+}

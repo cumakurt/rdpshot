@@ -456,25 +456,68 @@
     }
   }
 
-  function prependFinding(payload) {
-    var list = document.getElementById('live-findings');
-    if (!list) {
-      return;
-    }
+  var audioAlertsEnabled = false;
+  try {
+    audioAlertsEnabled = localStorage.getItem('rdpshot_audio_alerts') === 'true';
+  } catch (e) {}
 
+  function playAudioChime(type) {
+    if (!audioAlertsEnabled) return;
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      var now = ctx.currentTime;
+      if (type === 'critical') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(880, now);
+        osc.frequency.setValueAtTime(440, now + 0.12);
+        gain.gain.setValueAtTime(0.18, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+        osc.start(now);
+        osc.stop(now + 0.35);
+      } else {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(523.25, now);
+        osc.frequency.setValueAtTime(659.25, now + 0.1);
+        osc.frequency.setValueAtTime(783.99, now + 0.2);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.45);
+        osc.start(now);
+        osc.stop(now + 0.45);
+      }
+    } catch (err) {}
+  }
+
+  function triggerVisualPulse(type) {
+    var targets = [
+      document.querySelector('[data-live-status]'),
+      document.getElementById('live-terminal-card'),
+      document.querySelector('.page-head')
+    ];
+    var cls = type === 'critical' ? 'pulse-critical' : 'pulse-success';
+    targets.forEach(function (el) {
+      if (!el) return;
+      el.classList.add(cls);
+      setTimeout(function () { el.classList.remove(cls); }, 3500);
+    });
+  }
+
+  function appendLiveTerminalItem(eventType, title, metaText, badgeText, badgeClass) {
+    var list = document.getElementById('live-findings');
+    if (!list) return;
     var empty = list.querySelector('[data-live-empty]');
     if (empty && empty.parentNode) {
       empty.parentNode.removeChild(empty);
     }
-
-    var severity = payload.severity || payload.Severity || 'info';
-    var title = payload.title || payload.Title || payload.check_id || payload.CheckID || 'Finding';
-    var address = payload.address || payload.Address || payload.host || '';
-    var port = payload.port || payload.Port || '';
-    var target = address ? address + (port ? ':' + port : '') : 'unknown target';
-
     var item = document.createElement('li');
     item.className = 'finding-item';
+    item.setAttribute('data-event-type', eventType);
+    if (eventType === 'finding') {
+      item.setAttribute('data-event-sev', String(badgeText).toLowerCase());
+    }
 
     var head = document.createElement('div');
     head.className = 'finding-head';
@@ -484,21 +527,21 @@
     titleEl.textContent = String(title);
 
     var badge = document.createElement('span');
-    badge.className = SEVERITY_BADGE_CLASS[SEVERITY_ALIASES[String(severity).toLowerCase()] || String(severity).toLowerCase()] || SEVERITY_BADGE_CLASS.info;
-    badge.textContent = String(severity);
+    badge.className = badgeClass || 'badge badge-slate';
+    badge.textContent = String(badgeText);
 
     head.appendChild(titleEl);
     head.appendChild(badge);
 
     var meta = document.createElement('p');
     meta.className = 'finding-meta';
-    meta.textContent = target;
+    meta.textContent = metaText || '';
 
     item.appendChild(head);
     item.appendChild(meta);
     list.insertBefore(item, list.firstChild);
 
-    while (list.children.length > 12) {
+    while (list.children.length > 25) {
       list.removeChild(list.lastChild);
     }
 
@@ -507,6 +550,17 @@
     if (countEl) {
       countEl.textContent = String(liveFindingCount);
     }
+  }
+
+  function prependFinding(payload) {
+    var severity = payload.severity || payload.Severity || 'info';
+    var title = payload.title || payload.Title || payload.check_id || payload.CheckID || 'Finding';
+    var address = payload.address || payload.Address || payload.host || '';
+    var port = payload.port || payload.Port || '';
+    var target = address ? address + (port ? ':' + port : '') : 'unknown target';
+    var badgeCls = SEVERITY_BADGE_CLASS[SEVERITY_ALIASES[String(severity).toLowerCase()] || String(severity).toLowerCase()] || SEVERITY_BADGE_CLASS.info;
+
+    appendLiveTerminalItem('finding', title, target, severity, badgeCls);
   }
 
   function updateProgressFromPayload(payload) {
@@ -638,6 +692,12 @@
       var title = finding.title || finding.Title || finding.check_id || finding.CheckID || 'Finding';
       var address = finding.address || finding.Address || '';
       var port = finding.port || finding.Port || '';
+      if (sev === 'critical') {
+        triggerVisualPulse('critical');
+        playAudioChime('critical');
+      } else if (sev === 'high') {
+        triggerVisualPulse('critical');
+      }
       setLatest(String(sev).toUpperCase() + ' · ' + title + (address ? ' · ' + address + (port ? ':' + port : '') : ''),
         sev === 'critical' || sev === 'high' ? sev : (sev === 'medium' ? 'medium' : 'info'));
       return;
@@ -645,15 +705,20 @@
 
     if (effectiveType === 'credential' || effectiveType === 'cred') {
       var cred = payload && typeof payload === 'object' ? payload : {};
-      setLatest('Credential verified · ' + (cred.username || cred.Username || 'user') +
-        '@' + (cred.address || cred.Address || '?') + ':' + (cred.port || cred.Port || ''), 'ok');
+      var user = cred.username || cred.Username || 'user';
+      var hostStr = (cred.address || cred.Address || '?') + ':' + (cred.port || cred.Port || '');
+      appendLiveTerminalItem('credential', 'Verified credential: ' + user, hostStr, 'verified', 'badge badge-emerald');
+      triggerVisualPulse('success');
+      playAudioChime('success');
+      setLatest('Credential verified · ' + user + '@' + hostStr, 'ok');
       return;
     }
 
     if (effectiveType === 'screenshot') {
       var shot = payload && typeof payload === 'object' ? payload : {};
-      setLatest('Screenshot captured · ' + (shot.address || shot.Address || '') +
-        (shot.port || shot.Port ? ':' + (shot.port || shot.Port) : ''), 'info');
+      var shotTarget = (shot.address || shot.Address || '') + (shot.port || shot.Port ? ':' + (shot.port || shot.Port) : '');
+      appendLiveTerminalItem('screenshot', 'Screenshot captured', shotTarget, 'screen', 'badge badge-amber');
+      setLatest('Screenshot captured · ' + shotTarget, 'info');
       return;
     }
 
@@ -997,6 +1062,612 @@
         }
       });
     });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Playbook scripts & 1-click remediation                             */
+  /* ------------------------------------------------------------------ */
+
+  var playbookCache = {};
+
+  function loadPlaybookScript(checkID, tab, preEl, downloadLink) {
+    if (!checkID || !preEl) return;
+    tab = tab || 'powershell';
+    function applyData(scripts) {
+      var script = scripts[tab] || '# No script template available for ' + tab;
+      preEl.textContent = script;
+      if (downloadLink) {
+        downloadLink.setAttribute('href', '/api/v1/playbooks/' + encodeURIComponent(checkID) + '/script?format=' + encodeURIComponent(tab) + '&download=1');
+      }
+    }
+
+    if (playbookCache[checkID]) {
+      applyData(playbookCache[checkID]);
+      return;
+    }
+    fetch('/api/v1/playbooks/' + encodeURIComponent(checkID))
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('Failed to load playbook');
+        return resp.json();
+      })
+      .then(function (data) {
+        playbookCache[checkID] = data.scripts || {};
+        applyData(playbookCache[checkID]);
+      })
+      .catch(function (err) {
+        preEl.textContent = '# Error loading playbook: ' + err.message;
+      });
+  }
+
+  function initPlaybookScripts() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-playbook-box]'), function (box) {
+      var checkID = box.getAttribute('data-playbook-box');
+      var preEl = box.querySelector('[data-script-content]');
+      var downloadLink = box.querySelector('[data-download-script]');
+      loadPlaybookScript(checkID, 'powershell', preEl, downloadLink);
+
+      var tabs = box.querySelectorAll('[data-script-tab]');
+      Array.prototype.forEach.call(tabs, function (tabBtn) {
+        tabBtn.addEventListener('click', function () {
+          var selectedTab = tabBtn.getAttribute('data-script-tab');
+          Array.prototype.forEach.call(tabs, function (t) { t.classList.remove('is-active'); });
+          tabBtn.classList.add('is-active');
+          loadPlaybookScript(checkID, selectedTab, preEl, downloadLink);
+        });
+      });
+
+      var copyBtn = box.querySelector('[data-copy-script]');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', function () {
+          var label = copyBtn.querySelector('[data-copy-label]') || copyBtn;
+          var textToCopy = preEl ? preEl.textContent : '';
+          if (!navigator.clipboard) {
+            var temp = document.createElement('textarea');
+            temp.value = textToCopy;
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand('copy');
+            document.body.removeChild(temp);
+          } else {
+            navigator.clipboard.writeText(textToCopy);
+          }
+          var old = label.textContent;
+          label.textContent = 'Copied!';
+          setTimeout(function () { label.textContent = old; }, 2000);
+        });
+      }
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-quick-remediate]'), function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var index = btn.getAttribute('data-quick-remediate');
+        var row = document.querySelector('[data-finding-details="' + index + '"]');
+        if (row) {
+          row.removeAttribute('hidden');
+          var toggleBtn = document.querySelector('[data-finding-toggle="' + index + '"]');
+          if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'true');
+          row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Kanban vulnerability triage board                                  */
+  /* ------------------------------------------------------------------ */
+
+  function initKanbanBoard() {
+    var tableWrap = document.getElementById('findings-table-wrap');
+    var kanbanWrap = document.getElementById('findings-kanban-wrap');
+    var btnTable = document.getElementById('btn-view-table');
+    var btnKanban = document.getElementById('btn-view-kanban');
+    var bulkControls = document.getElementById('bulk-triage-controls');
+    if (!tableWrap || !kanbanWrap || !btnTable || !btnKanban) return;
+
+    btnTable.addEventListener('click', function () {
+      btnTable.classList.add('is-active');
+      btnKanban.classList.remove('is-active');
+      tableWrap.classList.remove('hidden');
+      kanbanWrap.classList.add('hidden');
+      if (bulkControls) bulkControls.classList.remove('hidden');
+    });
+
+    btnKanban.addEventListener('click', function () {
+      btnKanban.classList.add('is-active');
+      btnTable.classList.remove('is-active');
+      kanbanWrap.classList.remove('hidden');
+      tableWrap.classList.add('hidden');
+      if (bulkControls) bulkControls.classList.add('hidden');
+      renderKanbanCards();
+    });
+
+    function getFindingsFromDOM() {
+      var rows = document.querySelectorAll('[data-finding-row]');
+      var list = [];
+      Array.prototype.forEach.call(rows, function (row) {
+        var id = row.getAttribute('data-finding-id');
+        if (!id) return;
+        list.push({
+          id: id,
+          address: row.getAttribute('data-finding-address') || '',
+          port: row.getAttribute('data-finding-port') || '',
+          title: row.getAttribute('data-finding-title') || '',
+          severity: row.getAttribute('data-finding-severity') || 'info',
+          checkID: row.getAttribute('data-finding-check') || '',
+          cve: row.getAttribute('data-finding-cve') || '',
+          triage: row.getAttribute('data-finding-triage') || 'open',
+          rowIndex: row.getAttribute('data-finding-row')
+        });
+      });
+      return list;
+    }
+
+    function renderKanbanCards() {
+      var findings = getFindingsFromDOM();
+      var columns = ['open', 'confirmed', 'false_positive', 'remediated'];
+      var counts = { open: 0, confirmed: 0, false_positive: 0, remediated: 0 };
+
+      columns.forEach(function (col) {
+        var zone = kanbanWrap.querySelector('[data-kanban-zone="' + col + '"]');
+        if (zone) zone.innerHTML = '';
+      });
+
+      findings.forEach(function (f) {
+        var status = f.triage || 'open';
+        if (counts[status] !== undefined) counts[status]++;
+        var zone = kanbanWrap.querySelector('[data-kanban-zone="' + status + '"]');
+        if (!zone) return;
+
+        var card = document.createElement('div');
+        card.className = 'kanban-card p-3 rounded bg-surface-primary border border-subtle shadow-sm space-y-2 cursor-grab active:cursor-grabbing hover:border-indigo-400 transition-colors';
+        card.setAttribute('draggable', 'true');
+        card.setAttribute('data-card-id', f.id);
+
+        var sevCls = SEVERITY_BADGE_CLASS[f.severity.toLowerCase()] || 'badge badge-slate';
+        card.innerHTML =
+          '<div class="flex items-center justify-between gap-1">' +
+            '<span class="' + sevCls + ' text-xs">' + escapeHtml(f.severity) + '</span>' +
+            '<span class="font-mono text-xs text-subtle">' + escapeHtml(f.address) + ':' + escapeHtml(f.port) + '</span>' +
+          '</div>' +
+          '<p class="font-medium text-xs text-primary leading-snug">' + escapeHtml(f.title) + '</p>' +
+          (f.cve ? '<span class="badge badge-outline text-[10px]">' + escapeHtml(f.cve) + '</span>' : '') +
+          '<div class="flex items-center justify-between pt-1 border-t border-subtle text-xs gap-1">' +
+            '<button type="button" class="btn btn-ghost btn-xs text-[11px] py-0.5 px-1" data-kanban-remediate="' + f.rowIndex + '">Remediate</button>' +
+            '<select class="input input-xs text-[11px] py-0.5 px-1 rounded" data-kanban-move="' + f.id + '" aria-label="Change triage status">' +
+              '<option value="open"' + (status === 'open' ? ' selected' : '') + '>Open</option>' +
+              '<option value="confirmed"' + (status === 'confirmed' ? ' selected' : '') + '>Confirmed</option>' +
+              '<option value="false_positive"' + (status === 'false_positive' ? ' selected' : '') + '>False Positive</option>' +
+              '<option value="remediated"' + (status === 'remediated' ? ' selected' : '') + '>Remediated</option>' +
+            '</select>' +
+          '</div>';
+
+        card.addEventListener('dragstart', function (e) {
+          e.dataTransfer.setData('text/plain', f.id);
+          card.classList.add('opacity-50');
+        });
+        card.addEventListener('dragend', function () {
+          card.classList.remove('opacity-50');
+        });
+
+        zone.appendChild(card);
+      });
+
+      columns.forEach(function (col) {
+        var countEl = kanbanWrap.querySelector('[data-kanban-count="' + col + '"]');
+        if (countEl) countEl.textContent = String(counts[col]);
+      });
+
+      Array.prototype.forEach.call(kanbanWrap.querySelectorAll('[data-kanban-move]'), function (select) {
+        select.addEventListener('change', function () {
+          var fid = select.getAttribute('data-kanban-move');
+          var newStatus = select.value;
+          updateFindingStatus(fid, newStatus);
+        });
+      });
+
+      Array.prototype.forEach.call(kanbanWrap.querySelectorAll('[data-kanban-remediate]'), function (btn) {
+        btn.addEventListener('click', function () {
+          var idx = btn.getAttribute('data-kanban-remediate');
+          btnTable.click();
+          var row = document.querySelector('[data-finding-details="' + idx + '"]');
+          if (row) {
+            row.removeAttribute('hidden');
+            var tBtn = document.querySelector('[data-finding-toggle="' + idx + '"]');
+            if (tBtn) tBtn.setAttribute('aria-expanded', 'true');
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        });
+      });
+
+      columns.forEach(function (col) {
+        var zone = kanbanWrap.querySelector('[data-kanban-zone="' + col + '"]');
+        if (!zone) return;
+        zone.addEventListener('dragover', function (e) {
+          e.preventDefault();
+          zone.classList.add('bg-indigo-500/10', 'rounded');
+        });
+        zone.addEventListener('dragleave', function () {
+          zone.classList.remove('bg-indigo-500/10', 'rounded');
+        });
+        zone.addEventListener('drop', function (e) {
+          e.preventDefault();
+          zone.classList.remove('bg-indigo-500/10', 'rounded');
+          var fid = e.dataTransfer.getData('text/plain');
+          if (fid) {
+            updateFindingStatus(fid, col);
+          }
+        });
+      });
+    }
+
+    function updateFindingStatus(findingID, newStatus) {
+      fetch('/api/v1/findings/' + encodeURIComponent(findingID) + '/triage', {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ triage_status: newStatus })
+      })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('Status update failed');
+        var row = document.querySelector('[data-finding-id="' + findingID + '"]');
+        if (row) {
+          row.setAttribute('data-finding-triage', newStatus);
+          var select = row.querySelector('[data-triage-finding]');
+          if (select) select.value = newStatus;
+        }
+        portalNotify('Triage status set to ' + newStatus, 'ok');
+        renderKanbanCards();
+      })
+      .catch(function (err) {
+        portalNotify(err.message, 'error');
+      });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Compliance Posture Radar Chart (Chart.js Spider)                   */
+  /* ------------------------------------------------------------------ */
+
+  function initComplianceRadar() {
+    if (typeof window.Chart === 'undefined') return;
+
+    var detailCanvas = document.getElementById('compliance-radar-chart');
+    if (detailCanvas) {
+      var scanID = detailCanvas.getAttribute('data-scan-id');
+      if (scanID) {
+        fetch('/api/v1/scans/' + encodeURIComponent(scanID) + '/compliance-posture')
+          .then(function (resp) { return resp.json(); })
+          .then(function (posture) {
+            renderRadarChart(detailCanvas, [posture], ['#4f46e5'], ['rgba(79, 70, 229, 0.25)']);
+            var overallBadge = document.querySelector('[data-compliance-overall]');
+            if (overallBadge) {
+              overallBadge.textContent = posture.overall_score + '% (' + posture.grade + ')';
+            }
+            if (posture.standards) {
+              posture.standards.forEach(function (std) {
+                var el = document.querySelector('[data-comp-score="' + std.standard + '"]');
+                if (el) el.textContent = std.score + '% (' + std.grade + ')';
+              });
+            }
+          })
+          .catch(function () {});
+      }
+    }
+
+    var reportCanvas = document.getElementById('reports-compliance-radar');
+    if (reportCanvas) {
+      fetch('/api/v1/scans/all/compliance-posture')
+        .then(function (resp) { return resp.json(); })
+        .then(function (posture) {
+          renderRadarChart(reportCanvas, [posture], ['#06b6d4'], ['rgba(6, 182, 212, 0.25)']);
+          var badge = document.querySelector('[data-report-radar-badge]');
+          if (badge) badge.textContent = 'Overall: ' + posture.overall_score + '% (' + posture.grade + ')';
+        })
+        .catch(function () {});
+    }
+
+    var compareCanvas = document.getElementById('compare-radar-chart');
+    if (compareCanvas) {
+      var baseID = compareCanvas.getAttribute('data-base-id');
+      var againstID = compareCanvas.getAttribute('data-against-id');
+      if (baseID && againstID) {
+        Promise.all([
+          fetch('/api/v1/scans/' + encodeURIComponent(baseID) + '/compliance-posture').then(function (r) { return r.json(); }),
+          fetch('/api/v1/scans/' + encodeURIComponent(againstID) + '/compliance-posture').then(function (r) { return r.json(); })
+        ])
+        .then(function (res) {
+          var basePosture = res[0];
+          var againstPosture = res[1];
+          basePosture.label = 'Base Scan (' + basePosture.overall_score + '%)';
+          againstPosture.label = 'Against Scan (' + againstPosture.overall_score + '%)';
+          renderRadarChart(compareCanvas, [basePosture, againstPosture], ['#94a3b8', '#10b981'], ['rgba(148, 163, 184, 0.2)', 'rgba(16, 185, 129, 0.3)']);
+        })
+        .catch(function () {});
+      }
+    }
+
+    function renderRadarChart(canvas, postures, borderColors, bgColors) {
+      var labels = ['CIS Benchmark', 'PCI-DSS 4.0', 'NIST SP 800-53', 'ISO/IEC 27001'];
+      var isDark = document.documentElement.classList.contains('dark');
+      var gridColor = isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)';
+      var pointLabelColor = isDark ? '#cbd5e1' : '#334155';
+
+      var datasets = postures.map(function (p, idx) {
+        var scores = [100, 100, 100, 100];
+        if (p.standards) {
+          p.standards.forEach(function (std) {
+            if (std.standard === 'CIS') scores[0] = std.score;
+            if (std.standard === 'PCI-DSS') scores[1] = std.score;
+            if (std.standard === 'NIST') scores[2] = std.score;
+            if (std.standard === 'ISO-27001') scores[3] = std.score;
+          });
+        }
+        return {
+          label: p.label || 'Posture (%)',
+          data: scores,
+          borderColor: borderColors[idx] || '#4f46e5',
+          backgroundColor: bgColors[idx] || 'rgba(79, 70, 229, 0.25)',
+          pointBackgroundColor: borderColors[idx] || '#4f46e5',
+          pointBorderColor: '#fff',
+          pointHoverBackgroundColor: '#fff',
+          pointHoverBorderColor: borderColors[idx] || '#4f46e5',
+          borderWidth: 2
+        };
+      });
+
+      new window.Chart(canvas.getContext('2d'), {
+        type: 'radar',
+        data: { labels: labels, datasets: datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            r: {
+              angleLines: { color: gridColor },
+              grid: { color: gridColor },
+              pointLabels: { color: pointLabelColor, font: { size: 10, weight: '600' } },
+              suggestedMin: 0,
+              suggestedMax: 100,
+              ticks: { stepSize: 25, backdropColor: 'transparent', color: pointLabelColor }
+            }
+          },
+          plugins: {
+            legend: { position: 'bottom', labels: { color: pointLabelColor, boxWidth: 10, font: { size: 11 } } }
+          }
+        }
+      });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Credential Blast Radius & Attack Graph                             */
+  /* ------------------------------------------------------------------ */
+
+  function initBlastRadiusGraph() {
+    var btnScatter = document.getElementById('btn-estate-scatter');
+    var btnBlast = document.getElementById('btn-estate-blast');
+    var scatterWrap = document.getElementById('estate-scatter-wrap');
+    var blastWrap = document.getElementById('estate-blast-wrap');
+    var blastSvg = document.getElementById('blast-graph');
+    var tooltip = document.getElementById('blast-tooltip');
+    if (!btnScatter || !btnBlast || !scatterWrap || !blastWrap || !blastSvg) return;
+
+    btnScatter.addEventListener('click', function () {
+      btnScatter.classList.add('is-active');
+      btnBlast.classList.remove('is-active');
+      scatterWrap.classList.remove('hidden');
+      blastWrap.classList.add('hidden');
+    });
+
+    btnBlast.addEventListener('click', function () {
+      btnBlast.classList.add('is-active');
+      btnScatter.classList.remove('is-active');
+      blastWrap.classList.remove('hidden');
+      scatterWrap.classList.add('hidden');
+      loadBlastRadius();
+    });
+
+    var blastLoaded = false;
+    function loadBlastRadius() {
+      if (blastLoaded) return;
+      var params = new URLSearchParams(window.location.search);
+      var url = '/api/v1/estate/blast-radius?' + params.toString();
+      fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (graph) {
+          blastLoaded = true;
+          renderBlastTopology(graph);
+        })
+        .catch(function () {});
+    }
+
+    function renderBlastTopology(graph) {
+      blastSvg.innerHTML = '';
+      if (!graph.nodes || !graph.nodes.length) {
+        blastSvg.innerHTML = '<text x="480" y="220" text-anchor="middle" fill="#94a3b8" font-size="14">No open endpoints or blast radius paths found.</text>';
+        return;
+      }
+
+      var W = 960;
+      var H = 440;
+      var cx = W / 2;
+      var cy = H / 2;
+
+      var credNodes = graph.nodes.filter(function (n) { return n.type === 'credential'; });
+      var hostNodes = graph.nodes.filter(function (n) { return n.type === 'host'; });
+      var vulnNodes = graph.nodes.filter(function (n) { return n.type === 'vulnerability'; });
+
+      var nodeCoords = {};
+
+      if (credNodes.length > 0) {
+        var rCred = Math.min(100, 45 * credNodes.length);
+        credNodes.forEach(function (n, i) {
+          var angle = (2 * Math.PI * i) / credNodes.length - Math.PI / 2;
+          nodeCoords[n.id] = { x: cx + rCred * Math.cos(angle), y: cy + rCred * Math.sin(angle), node: n };
+        });
+      }
+
+      var rHost = 175;
+      hostNodes.forEach(function (n, i) {
+        var angle = (2 * Math.PI * i) / (hostNodes.length || 1);
+        nodeCoords[n.id] = { x: cx + rHost * Math.cos(angle), y: cy + rHost * Math.sin(angle), node: n };
+      });
+
+      var rVuln = 205;
+      vulnNodes.forEach(function (n, i) {
+        var angle = (2 * Math.PI * i) / (vulnNodes.length || 1) + Math.PI / 4;
+        nodeCoords[n.id] = { x: cx + rVuln * Math.cos(angle), y: cy + rVuln * Math.sin(angle), node: n };
+      });
+
+      var edgesG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      (graph.edges || []).forEach(function (e) {
+        var p1 = nodeCoords[e.source];
+        var p2 = nodeCoords[e.target];
+        if (!p1 || !p2) return;
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', p1.x);
+        line.setAttribute('y1', p1.y);
+        line.setAttribute('x2', p2.x);
+        line.setAttribute('y2', p2.y);
+        line.setAttribute('stroke', e.relation === 'compromised_by' ? '#10b981' : (e.relation === 'lateral_pivot' ? '#818cf8' : '#f43f5e'));
+        line.setAttribute('stroke-width', e.relation === 'compromised_by' ? '2.5' : '1.5');
+        line.setAttribute('stroke-opacity', '0.65');
+        if (e.relation === 'lateral_pivot') {
+          line.setAttribute('stroke-dasharray', '5,5');
+        }
+        edgesG.appendChild(line);
+      });
+      blastSvg.appendChild(edgesG);
+
+      var nodesG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      Object.keys(nodeCoords).forEach(function (id) {
+        var item = nodeCoords[id];
+        var n = item.node;
+        var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('class', 'attack-node');
+        g.setAttribute('data-node-id', id);
+
+        var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', item.x);
+        circle.setAttribute('cy', item.y);
+        var radius = n.type === 'credential' ? 18 : (n.type === 'host' ? 14 : 12);
+        circle.setAttribute('r', radius);
+
+        var fill = n.type === 'credential' ? '#10b981' : (n.type === 'host' ? '#6366f1' : '#ef4444');
+        circle.setAttribute('fill', fill);
+        circle.setAttribute('stroke', '#ffffff');
+        circle.setAttribute('stroke-width', '2');
+        g.appendChild(circle);
+
+        var text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', item.x);
+        text.setAttribute('y', item.y + radius + 12);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', '#e2e8f0');
+        text.setAttribute('font-size', '10');
+        text.setAttribute('font-weight', '500');
+        text.textContent = n.label || id;
+        g.appendChild(text);
+
+        g.addEventListener('mouseenter', function (evt) {
+          if (!tooltip) return;
+          tooltip.innerHTML = '<strong>' + escapeHtml(n.label) + '</strong> (' + escapeHtml(n.type) + ')' +
+            (n.domain ? '<br>Domain: ' + escapeHtml(n.domain) : '') +
+            (n.address ? '<br>Endpoint: ' + escapeHtml(n.address) + ':' + escapeHtml(n.port) : '') +
+            (n.hardening_score ? '<br>Hardening: ' + n.hardening_score + '/100' : '');
+          tooltip.style.left = (evt.clientX + 10) + 'px';
+          tooltip.style.top = (evt.clientY + 10) + 'px';
+          tooltip.classList.remove('hidden');
+        });
+        g.addEventListener('mouseleave', function () {
+          if (tooltip) tooltip.classList.add('hidden');
+        });
+
+        g.addEventListener('click', function () {
+          Array.prototype.forEach.call(nodesG.querySelectorAll('.attack-node'), function (el) {
+            el.classList.remove('is-active');
+          });
+          g.classList.add('is-active');
+        });
+
+        nodesG.appendChild(g);
+      });
+      blastSvg.appendChild(nodesG);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Live Terminal filters & Audio Chimes                               */
+  /* ------------------------------------------------------------------ */
+
+  function initLiveTerminalAndAudio() {
+    var audioBtn = document.getElementById('toggle-audio-alerts');
+    var iconEl = document.getElementById('audio-alert-icon');
+    var labelEl = document.getElementById('audio-alert-label');
+
+    function updateAudioUI() {
+      if (!audioBtn) return;
+      audioBtn.setAttribute('data-audio-enabled', audioAlertsEnabled ? 'true' : 'false');
+      if (iconEl) iconEl.textContent = audioAlertsEnabled ? '🔔' : '🔇';
+      if (labelEl) labelEl.textContent = audioAlertsEnabled ? 'Alerts ON' : 'Alerts OFF';
+      if (audioAlertsEnabled) {
+        audioBtn.classList.add('tone-emerald');
+      } else {
+        audioBtn.classList.remove('tone-emerald');
+      }
+    }
+    updateAudioUI();
+
+    if (audioBtn) {
+      audioBtn.addEventListener('click', function () {
+        audioAlertsEnabled = !audioAlertsEnabled;
+        try {
+          localStorage.setItem('rdpshot_audio_alerts', audioAlertsEnabled ? 'true' : 'false');
+        } catch (e) {}
+        updateAudioUI();
+        if (audioAlertsEnabled) {
+          playAudioChime('success');
+        }
+      });
+    }
+
+    var filterBtns = document.querySelectorAll('[data-terminal-filter]');
+    var searchInput = document.getElementById('terminal-search');
+    var currentFilter = 'all';
+
+    function applyTerminalFilter() {
+      var query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+      var list = document.getElementById('live-findings');
+      if (!list) return;
+      var items = list.querySelectorAll('.finding-item');
+      Array.prototype.forEach.call(items, function (item) {
+        var eventType = item.getAttribute('data-event-type') || 'finding';
+        var eventSev = item.getAttribute('data-event-sev') || '';
+        var text = item.textContent.toLowerCase();
+
+        var matchesType = (currentFilter === 'all') ||
+          (currentFilter === 'critical' && eventSev === 'critical') ||
+          (currentFilter === 'credential' && eventType === 'credential') ||
+          (currentFilter === 'screenshot' && eventType === 'screenshot');
+
+        var matchesQuery = !query || text.indexOf(query) !== -1;
+        item.style.display = matchesType && matchesQuery ? '' : 'none';
+      });
+    }
+
+    Array.prototype.forEach.call(filterBtns, function (btn) {
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(filterBtns, function (b) { b.classList.remove('is-active'); });
+        btn.classList.add('is-active');
+        currentFilter = btn.getAttribute('data-terminal-filter') || 'all';
+        applyTerminalFilter();
+      });
+    });
+
+    if (searchInput) {
+      searchInput.addEventListener('input', applyTerminalFilter);
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -1386,12 +2057,13 @@
         return (b.risk_score || 0) - (a.risk_score || 0);
       });
       if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No open RDP hosts match this filter.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No open RDP hosts match this filter.</td></tr>';
         return;
       }
       tbody.innerHTML = rows.map(function (n) {
         var sev = n.max_severity || '—';
         var cls = n.id === selectedId ? ' is-selected' : '';
+        var nlaParam = n.nla_required ? '' : '&nla=0';
         return '<tr class="estate-row' + cls + '" data-row-id="' + escapeHtml(n.id) + '">' +
           '<td class="cell-mono"><button type="button" class="estate-host-btn" data-select="' +
             escapeHtml(n.id) + '">' + escapeHtml(n.id) + '</button></td>' +
@@ -1404,7 +2076,12 @@
           '<td class="cell-mono text-sm">' +
             (n.nla_required ? 'NLA' : 'no NLA') +
             (n.tls_version ? ' · ' + escapeHtml(n.tls_version) : '') +
-          '</td></tr>';
+          '</td>' +
+          '<td class="whitespace-nowrap"><div class="flex items-center gap-1">' +
+            '<a href="/api/v1/hosts/connect.rdp?address=' + encodeURIComponent(n.address || '') + '&port=' + encodeURIComponent(n.port || 3389) + nlaParam + '" class="btn btn-ghost btn-xs text-xs py-0.5 px-1.5" title="Download .rdp file">.rdp</a>' +
+            '<a href="rdp://' + encodeURIComponent(n.address || '') + ':' + encodeURIComponent(n.port || 3389) + '" class="btn btn-ghost btn-xs text-xs py-0.5 px-1.5" title="Launch default RDP client">RDP</a>' +
+          '</div></td>' +
+          '</tr>';
       }).join('');
     }
 
@@ -1582,6 +2259,15 @@
       input.addEventListener('search', applyFilter);
     }
 
+    var currentShotID = '';
+    var activeInspectData = null;
+    var overlay = document.getElementById('lightbox-bbox-overlay');
+    var details = document.getElementById('inspector-details');
+    var keywordsEl = document.getElementById('inspector-keywords');
+    var usersEl = document.getElementById('inspector-users');
+    var tagsEl = document.getElementById('inspector-tags');
+    var toggleBtn = document.getElementById('toggle-ocr-boxes');
+
     function closeLightbox() {
       if (!lightbox || !lightboxImage) {
         return;
@@ -1589,16 +2275,98 @@
       lightbox.hidden = true;
       lightboxImage.removeAttribute('src');
       document.body.style.overflow = '';
+      if (overlay) {
+        overlay.classList.add('hidden');
+        overlay.innerHTML = '';
+      }
+      if (details) details.classList.add('hidden');
+      if (tagsEl) tagsEl.innerHTML = '';
+      activeInspectData = null;
+      currentShotID = '';
     }
 
-    function openLightbox(src, alt) {
+    function openLightbox(src, alt, shotID) {
       if (!lightbox || !lightboxImage || !src) {
         return;
       }
+      currentShotID = shotID || '';
+      activeInspectData = null;
+      if (overlay) {
+        overlay.classList.add('hidden');
+        overlay.innerHTML = '';
+      }
+      if (details) details.classList.add('hidden');
+      if (tagsEl) tagsEl.innerHTML = '';
+
       lightboxImage.src = src;
       lightboxImage.alt = alt || 'Fullscreen evidence image';
       lightbox.hidden = false;
       document.body.style.overflow = 'hidden';
+    }
+
+    if (toggleBtn && overlay) {
+      toggleBtn.addEventListener('click', function () {
+        if (!currentShotID) {
+          portalNotify('No screenshot record attached', 'error');
+          return;
+        }
+        var isHidden = overlay.classList.contains('hidden');
+        if (!isHidden) {
+          overlay.classList.add('hidden');
+          if (details) details.classList.add('hidden');
+          return;
+        }
+        if (activeInspectData) {
+          renderBBoxes(activeInspectData);
+          return;
+        }
+        fetch('/api/v1/screenshots/' + encodeURIComponent(currentShotID) + '/inspect')
+          .then(function (r) {
+            if (!r.ok) throw new Error('Inspection unavailable');
+            return r.json();
+          })
+          .then(function (data) {
+            activeInspectData = data;
+            renderBBoxes(data);
+          })
+          .catch(function (err) {
+            portalNotify(err.message, 'error');
+          });
+      });
+    }
+
+    function renderBBoxes(data) {
+      if (!overlay) return;
+      overlay.innerHTML = '';
+      overlay.classList.remove('hidden');
+      if (details) details.classList.remove('hidden');
+
+      if (keywordsEl) {
+        keywordsEl.textContent = (data.keywords && data.keywords.length) ? data.keywords.join(', ') : 'None';
+      }
+      if (usersEl) {
+        usersEl.textContent = (data.detected_users && data.detected_users.length) ? data.detected_users.join(', ') : 'None detected';
+      }
+      if (tagsEl && data.sensitive_tags) {
+        tagsEl.innerHTML = data.sensitive_tags.map(function (t) {
+          return '<span class="badge badge-rose text-[10px]">' + escapeHtml(t) + '</span>';
+        }).join('');
+      }
+
+      (data.bounding_boxes || []).forEach(function (box) {
+        var b = document.createElement('div');
+        b.className = 'absolute border-2 border-amber-400 bg-amber-400/20 rounded pointer-events-none transition-all';
+        b.style.left = (box.x * 100) + '%';
+        b.style.top = (box.y * 100) + '%';
+        b.style.width = (box.w * 100) + '%';
+        b.style.height = (box.h * 100) + '%';
+
+        var label = document.createElement('span');
+        label.className = 'absolute top-0 left-0 -translate-y-full bg-amber-500 text-black font-semibold text-[10px] px-1 rounded shadow';
+        label.textContent = box.label;
+        b.appendChild(label);
+        overlay.appendChild(b);
+      });
     }
 
     if (lightbox && lightboxImage) {
@@ -1606,7 +2374,7 @@
         btn.addEventListener('click', function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
-          openLightbox(btn.getAttribute('data-full-src'), btn.getAttribute('data-alt'));
+          openLightbox(btn.getAttribute('data-full-src'), btn.getAttribute('data-alt'), btn.getAttribute('data-screenshot-id'));
         });
       });
 
@@ -1616,7 +2384,8 @@
           var opener = btn ? btn.querySelector('[data-lightbox-open]') : null;
           var src = opener ? opener.getAttribute('data-full-src') : img.getAttribute('src');
           var alt = opener ? opener.getAttribute('data-alt') : img.getAttribute('alt');
-          openLightbox(src, alt);
+          var shotID = opener ? opener.getAttribute('data-screenshot-id') : '';
+          openLightbox(src, alt, shotID);
         });
         img.style.cursor = 'zoom-in';
       });
@@ -2755,6 +3524,11 @@
     initBruteForm();
     initFindingToggles();
     initFindingTriage();
+    initPlaybookScripts();
+    initKanbanBoard();
+    initComplianceRadar();
+    initBlastRadiusGraph();
+    initLiveTerminalAndAudio();
     initScheduleForm();
     initScheduleActions();
     initExports();
@@ -2767,5 +3541,200 @@
     initGallery();
     initScansDashboard();
     initEstateMap();
+    initMITREHeatmap();
+    initDecoyListener();
   });
 })();
+
+// ─── MITRE ATT&CK Heatmap ────────────────────────────────────────────────────
+function initMITREHeatmap() {
+  var loadBtn = document.getElementById('mitreLoadBtn');
+  if (!loadBtn) return;
+
+  var grid    = document.getElementById('mitreGrid');
+  var kpisEl  = document.getElementById('mitreKPIs');
+  var emptyEl = document.getElementById('mitreEmpty');
+  var scanSel = document.getElementById('mitreScanId');
+  var engSel  = document.getElementById('mitreEngagement');
+
+  loadBtn.addEventListener('click', function () {
+    var scanId = scanSel ? scanSel.value : '';
+    var eng    = engSel  ? engSel.value  : '';
+    var url = scanId
+      ? '/api/v1/scans/' + encodeURIComponent(scanId) + '/mitre'
+      : '/api/v1/mitre?engagement=' + encodeURIComponent(eng);
+
+    loadBtn.disabled = true;
+    loadBtn.textContent = 'Loading...';
+    fetch(url)
+      .then(function (r) { return r.json(); })
+      .then(function (hm) { renderMITREHeatmap(hm, grid, kpisEl, emptyEl); })
+      .catch(function (e) { alert('Failed to load heatmap: ' + e); })
+      .finally(function () { loadBtn.disabled = false; loadBtn.textContent = 'Load Heatmap'; });
+  });
+}
+
+function renderMITREHeatmap(hm, grid, kpisEl, emptyEl) {
+  grid.innerHTML = '';
+  if (!hm.techniques || hm.techniques.length === 0) {
+    if (emptyEl) emptyEl.style.display = '';
+    if (kpisEl)  kpisEl.classList.add('hidden');
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (kpisEl)  kpisEl.classList.remove('hidden');
+
+  var kpiMap = { detected: 'kpiDetected', potential: 'kpiPotential', mitigated: 'kpiMitigated', not_applicable: 'kpiNA' };
+  Object.keys(kpiMap).forEach(function (k) {
+    var el = document.getElementById(kpiMap[k]);
+    if (el) el.textContent = hm[k] || 0;
+  });
+
+  hm.techniques.forEach(function (tech) {
+    var div = document.createElement('div');
+    div.className = 'mitre-card mitre-' + tech.status;
+    var evHTML  = (tech.evidence    || []).map(function (e) { return '<span class="evidence-tag">' + escHtml(e) + '</span>'; }).join('');
+    var mitHTML = (tech.mitigations || []).map(function (m) { return '<span class="evidence-tag" style="background:rgba(34,197,94,0.2)">' + escHtml(m) + '</span>'; }).join('');
+    div.innerHTML =
+      '<div class="mitre-tactic">' + escHtml(tech.tactic) + '</div>' +
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">' +
+        '<div>' +
+          '<span style="font-family:monospace;font-size:0.7rem;opacity:0.55">' + escHtml(tech.id) + '</span>' +
+          '<div style="font-weight:600;font-size:0.875rem;margin-top:2px">' + escHtml(tech.name) + '</div>' +
+        '</div>' +
+        '<span class="mitre-badge badge-' + tech.status + '">' + tech.status.replace('_', ' ') + '</span>' +
+      '</div>' +
+      (tech.description ? '<p style="font-size:0.75rem;opacity:0.55;margin-top:8px;line-height:1.5">' + escHtml(tech.description) + '</p>' : '') +
+      (evHTML  ? '<div style="margin-top:8px">'  + evHTML  + '</div>' : '') +
+      (mitHTML ? '<div style="margin-top:4px">'  + mitHTML + '</div>' : '');
+    grid.appendChild(div);
+  });
+}
+
+// ─── Decoy / Honeypot Listener ───────────────────────────────────────────────
+function initDecoyListener() {
+  var startBtn     = document.getElementById('decoyStartBtn');
+  if (!startBtn) return;
+
+  var stopBtn      = document.getElementById('decoyStopBtn');
+  var refreshBtn   = document.getElementById('decoyRefreshBtn');
+  var statusVal    = document.getElementById('decoyStatusValue');
+  var statusCard   = document.getElementById('decoyStatusCard');
+  var eventCount   = document.getElementById('decoyEventCount');
+  var bindDisplay  = document.getElementById('decoyBindAddr');
+  var tbody        = document.getElementById('decoyEventsTbody');
+  var bindInput    = document.getElementById('decoyBindInput');
+  var webhookInput = document.getElementById('decoyWebhookInput');
+  var pollTimer    = null;
+
+  function setRunning(running, bindAddr) {
+    if (statusVal)   statusVal.textContent = running ? 'RUNNING' : 'STOPPED';
+    if (statusCard)  statusCard.style.borderTop = running ? '3px solid #22c55e' : '3px solid #6b7280';
+    if (startBtn)    startBtn.disabled = running;
+    if (stopBtn) {
+      stopBtn.disabled      = !running;
+      stopBtn.style.opacity = running ? '1' : '0.4';
+      stopBtn.style.cursor  = running ? 'pointer' : 'not-allowed';
+    }
+    if (bindDisplay) bindDisplay.textContent = bindAddr || '-';
+    if (running && !pollTimer) {
+      pollTimer = setInterval(refreshEvents, 5000);
+    } else if (!running && pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function refreshStatus() {
+    fetch('/api/v1/decoy/status')
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setRunning(d.running, d.bind_addr); })
+      .catch(function () {});
+  }
+
+  function refreshEvents() {
+    fetch('/api/v1/decoy/events')
+      .then(function (r) { return r.json(); })
+      .then(function (d) { renderDecoyEvents(d.events || [], d.count || 0, tbody, eventCount); })
+      .catch(function () {});
+  }
+
+  startBtn.addEventListener('click', function () {
+    var payload = {
+      bind_addr:       (bindInput    ? bindInput.value    : '') || '0.0.0.0:13389',
+      notify_webhook:  (webhookInput ? webhookInput.value : '') || ''
+    };
+    startBtn.disabled    = true;
+    startBtn.textContent = 'Starting...';
+    fetch('/api/v1/decoy/start', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload)
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        startBtn.textContent = 'Start Listener';
+        if (d.error) {
+          alert('Error: ' + d.error);
+          startBtn.disabled = false;
+          return;
+        }
+        setRunning(true, d.bind_addr);
+        refreshEvents();
+      })
+      .catch(function (e) {
+        alert('Request failed: ' + e);
+        startBtn.disabled    = false;
+        startBtn.textContent = 'Start Listener';
+      });
+  });
+
+  if (stopBtn) {
+    stopBtn.addEventListener('click', function () {
+      stopBtn.disabled = true;
+      fetch('/api/v1/decoy/stop', { method: 'POST' })
+        .then(function () { setRunning(false, ''); })
+        .catch(function () { stopBtn.disabled = false; });
+    });
+  }
+
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', refreshEvents);
+  }
+
+  refreshStatus();
+  refreshEvents();
+}
+
+function renderDecoyEvents(events, count, tbody, eventCount) {
+  if (eventCount) eventCount.textContent = count;
+  if (!tbody) return;
+  if (!events || events.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;opacity:0.5">No connections captured yet.</td></tr>';
+    return;
+  }
+
+  var stageColors = { tcp: '#6b7280', rdp_neg: '#f59e0b', tls: '#3b82f6', ntlm: '#ef4444' };
+
+  tbody.innerHTML = events.map(function (ev) {
+    var stageColor = stageColors[ev.stage] || '#9ca3af';
+    var stageBadge = '<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:0.7rem;font-weight:700;background:' +
+      stageColor + ';color:#fff">' + escHtml(ev.stage || '-') + '</span>';
+
+    return '<tr>' +
+      '<td style="font-family:monospace;font-size:0.72rem;white-space:nowrap">' + escHtml(ev.at) + '</td>' +
+      '<td style="font-family:monospace;font-weight:700;color:#ef4444">' + escHtml(ev.remote_ip || '-') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.75rem">' + escHtml(ev.remote_port || '-') + '</td>' +
+      '<td>' + stageBadge + '</td>' +
+      '<td style="font-size:0.75rem;white-space:nowrap">' + escHtml(ev.tls_version || '-') +
+        (ev.tls_cipher ? '<br><span style="opacity:0.5;font-size:0.65rem">' + escHtml(ev.tls_cipher) + '</span>' : '') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.72rem">' +
+        (ev.rdp_cookie ? '<span style="color:#f59e0b">' + escHtml(ev.rdp_cookie) + '</span>' : '<span style="opacity:0.35">-</span>') + '</td>' +
+      '<td>' + (ev.ntlm_domain ? '<span style="font-weight:600">' + escHtml(ev.ntlm_domain) + '</span>' : '<span style="opacity:0.35">-</span>') + '</td>' +
+      '<td>' + (ev.ntlm_workstation ? '<span style="color:#a78bfa;font-weight:600">' + escHtml(ev.ntlm_workstation) + '</span>' : '<span style="opacity:0.35">-</span>') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.65rem;opacity:0.6">' + escHtml(ev.ntlm_flags || '-') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.65rem;opacity:0.45;max-width:120px;overflow:hidden;text-overflow:ellipsis">' +
+        escHtml((ev.raw || '').substring(0, 32)) + (ev.raw && ev.raw.length > 32 ? '...' : '') + '</td>' +
+    '</tr>';
+  }).join('');
+}

@@ -1,0 +1,86 @@
+{{ define "decoy" }}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {{ template "head" . }}
+  </head>
+  <body class="antialiased">
+    {{ template "nav" . }}
+    <main class="page-main">
+      <section class="page-head">
+        <div>
+          <p class="page-eyebrow">Active Defense</p>
+          <h1 class="page-title mt-1">Decoy / Honeypot Listener</h1>
+          <p class="page-subtitle">Simulate a vulnerable RDP endpoint to detect internal attackers. Every connection attempt fires a SIEM alert.</p>
+        </div>
+      </section>
+
+      <!-- Status KPIs -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div class="stat-card" id="decoyStatusCard">
+          <div class="stat-value" id="decoyStatusValue">—</div>
+          <div class="stat-label">Listener Status</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="decoyEventCount">0</div>
+          <div class="stat-label">Connections Captured</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="decoyBindAddr" style="font-size:1rem">—</div>
+          <div class="stat-label">Bind Address</div>
+        </div>
+      </div>
+
+      <!-- Control Panel -->
+      <section class="card mb-6">
+        <h2 class="card-title" style="padding:1rem 1rem 0">Listener Configuration</h2>
+        <div style="padding:1rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem">
+          <div>
+            <label class="label" for="decoyBindInput">Bind Address</label>
+            <input id="decoyBindInput" class="input" type="text" value="0.0.0.0:13389" placeholder="0.0.0.0:13389">
+            <p style="font-size:0.75rem;margin-top:4px;opacity:0.55">Use a non-standard port (e.g. 13389) to avoid OS conflicts unless you have root/admin access.</p>
+          </div>
+          <div>
+            <label class="label" for="decoyWebhookInput">Alert Webhook URL (optional)</label>
+            <input id="decoyWebhookInput" class="input" type="url" placeholder="https://hooks.slack.com/...">
+            <p style="font-size:0.75rem;margin-top:4px;opacity:0.55">Fires a critical alert on every attacker connection. Supports Slack, Discord, Teams, and generic JSON.</p>
+          </div>
+        </div>
+        <div style="padding:0 1rem 1rem;display:flex;gap:0.75rem;flex-wrap:wrap">
+          <button id="decoyStartBtn" class="btn btn-primary">Start Listener</button>
+          <button id="decoyStopBtn" class="btn" style="background:#ef4444;color:#fff;opacity:0.4;cursor:not-allowed" disabled>Stop Listener</button>
+          <button id="decoyRefreshBtn" class="btn btn-secondary" style="margin-left:auto">Refresh Events</button>
+        </div>
+      </section>
+
+      <!-- Events Table -->
+      <section class="card">
+        <h2 class="card-title" style="padding:1rem 1rem 0.5rem">Captured Attacker Connections</h2>
+        <div style="overflow-x:auto">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Remote IP</th>
+                <th>Port</th>
+                <th>Stage</th>
+                <th>TLS</th>
+                <th>RDP Cookie</th>
+                <th>NTLM Domain</th>
+                <th>NTLM Workstation</th>
+                <th>NTLM Flags</th>
+                <th>Raw (hex)</th>
+              </tr>
+            </thead>
+            <tbody id="decoyEventsTbody">
+              <tr><td colspan="10" style="text-align:center;padding:2rem;opacity:0.5">No connections captured yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    {{ template "footer" . }}
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
+{{ end }}
