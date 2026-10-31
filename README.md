@@ -14,7 +14,7 @@ BloodHound CE export, MITRE ATT&CK heatmap, AI-powered executive summaries,
 SARIF export for CI/CD pipelines, a DSL query language, MTTR trend analytics,
 and a built-in RDP honeypot/decoy listener.
 
-> ## ⚠️ Legal / authorized-use warning
+> ##  Legal / authorized-use warning
 >
 > `rdpshot` is dual-use security tooling. **Only scan systems you are
 > explicitly authorized to test.** Unauthorized scanning and credential testing
@@ -58,7 +58,7 @@ and a built-in RDP honeypot/decoy listener.
 * **Compliance mapping** — findings mapped against **CIS Benchmarks**, **PCI-DSS 4.0**,
   **NIST SP 800-53**, and **ISO 27001**, rendered in executive HTML, CSV, and PDF reports.
 
-### 🩸 Red Team & Offensive Features
+### Red Team & Offensive Features
 * **BloodHound CE JSON Export** — converts Blast Radius data (verified
   credentials, open hosts, BlueKeep exploitability) into a BloodHound
   Community Edition v5 `.json` file. Drag-and-drop into BloodHound to
@@ -75,7 +75,7 @@ and a built-in RDP honeypot/decoy listener.
   (`rdp-shadow-unprompted-exposed`) and surfaces it on the MITRE heatmap as
   T1563.002.
 
-### 🎯 Blue Team, CISO & Compliance Features
+### Blue Team, CISO & Compliance Features
 * **MITRE ATT&CK Heatmap** — maps scan findings and verified credentials to
   8 RDP-relevant ATT&CK techniques (T1021.001, T1110.003, T1078, T1563.002,
   T1046, T1557, T1040, T1190). Each technique shows `detected`, `mitigated`,
@@ -95,7 +95,7 @@ and a built-in RDP honeypot/decoy listener.
 * **Policy-as-code** — declarative pass/fail gate and CI CLI (`rdpshot policy check`).
 * **SIEM streaming** — JSON or CEF webhook on scan completion.
 
-### 🔍 Operator Experience & Search
+### Operator Experience & Search
 * **DSL Query Language** — filter hosts and findings with a concise query
   syntax: `nla:false tls:1.0`, `severity:critical creds:true`,
   `cve:CVE-2019-0708 state:open`. Supported fields: `nla`, `tls`, `port`,
@@ -113,7 +113,7 @@ and a built-in RDP honeypot/decoy listener.
 * **Engagement workspace** — scope freeze, host notes, evidence packs with
   SHA-256 manifest.
 
-### 🪤 Active Defense
+### Active Defense
 * **Decoy / Honeypot Listener** — simulates a vulnerable Windows RDP server
   on a configurable port. Every connection: completes HYBRID negotiation,
   upgrades to TLS, parses the attacker's NTLM Negotiate blob to extract
