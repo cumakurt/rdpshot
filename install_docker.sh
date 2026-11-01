@@ -154,6 +154,55 @@ print_header() {
   printf '%s%s%s\n\n' "$C_DIM" "--------------------------------------------------------------" "$C_RESET"
 }
 
+# print_run_instructions ends the installer with copy-pasteable commands for
+# running and operating the container, so the operator does not have to look
+# up the Compose invocation or the port/volume mapping afterwards.
+print_run_instructions() {
+  local health_url="http://${HEALTH_HOST}:${HOST_PORT}/api/v1/about"
+  local health_cmd="curl -s ${health_url}"
+  local run_token_flag=""
+  if [[ -n "$TOKEN" ]]; then
+    # Never echo the secret itself: this output may be piped into logs. The
+    # operator can read the value from .env when copy-pasting.
+    health_cmd="curl -s -H \"Authorization: Bearer \$RDSHOT_TOKEN\" ${health_url}"
+    run_token_flag='     -e RDSHOT_TOKEN="$RDSHOT_TOKEN" \'
+  fi
+
+  printf '\n%s %sHow to run it with Docker%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '   %-12s %s\n' "start" "docker compose up -d"
+  printf '   %-12s %s\n' "restart" "docker compose restart"
+  printf '   %-12s %s\n' "stop" "docker compose down"
+  printf '   %-12s %s\n' "logs" "docker logs -f ${CONTAINER_NAME}"
+  printf '   %-12s %s\n' "health" "$health_cmd"
+  printf '   %-12s %s\n' "cli" "docker exec -it ${CONTAINER_NAME} rdpshot targets 10.0.0.0/24"
+
+  printf '\n%s %sWithout Compose (single docker run)%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '   docker run -d --rm --name %s \\\n' "$CONTAINER_NAME"
+  printf '     -p %s:%s \\\n' "${BIND_ADDR}:${HOST_PORT}" "$CONTAINER_PORT"
+  printf '     -v %s:/data \\\n' "$VOLUME_NAME"
+  printf '     --read-only --tmpfs /tmp --security-opt no-new-privileges:true \\\n'
+  if [[ -n "$run_token_flag" ]]; then
+    printf '%s\n' "$run_token_flag"
+  fi
+  printf '     %s \\\n' "${IMAGE_NAME}:latest"
+  printf '     serve --addr 0.0.0.0:8722 --db /data/rdpshot.db --outputs /data\n'
+
+  if [[ -n "$TOKEN" ]]; then
+    printf '\n%s%s\n%s%s\n' "$C_DIM" \
+      "The token is masked above; export it before pasting those commands:" \
+      "  export RDSHOT_TOKEN=\$(sed -n 's/^RDSHOT_TOKEN=//p' ${SCRIPT_DIR}/.env)" \
+      "$C_RESET"
+  fi
+
+  printf '\n%s %sMaintenance%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '   %-12s %s\n' "rebuild" "./install_docker.sh"
+  printf '   %-12s %s\n' "full image" "./install_docker.sh --target full"
+  printf '   %-12s %s\n' "uninstall" "./install_docker.sh --uninstall"
+  printf '%s%s%s\n' "$C_DIM" \
+    "Run the compose commands from ${SCRIPT_DIR}." \
+    "$C_RESET"
+}
+
 # run_step <message> <command...> — executes quietly, animating progress
 run_step() {
   local message=$1
@@ -599,6 +648,10 @@ probe_http() {
 }
 
 verify_install() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "dry-run: would verify http://${HEALTH_HOST}:${HOST_PORT}/api/v1/about"
+    return 0
+  fi
   # `docker compose up -d` returns while the container is still starting, so
   # poll the state before treating a short delay as a failure.
   local attempt state
@@ -800,19 +853,20 @@ main() {
   progress_finish
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '\n%s %sdry-run complete%s\n' "$C_BOLD" "$C_YELLOW" "$C_RESET"
+    printf '\n%s %sdry-run complete%s %s(nothing was changed)%s\n' \
+      "$C_BOLD" "$C_YELLOW" "$C_RESET" "$C_DIM" "$C_RESET"
   else
     printf '\n%s %srdpshot is running%s\n' "$C_BOLD" "$C_GREEN" "$C_RESET"
   fi
-  printf '   %-14s %s\n' "url" "http://${BIND_ADDR}:${HOST_PORT}/"
-  printf '   %-14s %s\n' "container" "$CONTAINER_NAME"
-  printf '   %-14s %s\n' "image" "${IMAGE_NAME}:${VERSION_TAG}"
-  printf '   %-14s %s\n' "volume" "$VOLUME_NAME"
-  printf '   %-14s %s\n' "logs" "docker logs -f ${CONTAINER_NAME}"
-  printf '   %-14s %s\n' "stop" "docker compose down"
-  printf '   %-14s %s\n\n' "uninstall" "./install_docker.sh --uninstall"
+  printf '   %-12s %s\n' "url" "http://${BIND_ADDR}:${HOST_PORT}/"
+  printf '   %-12s %s\n' "container" "$CONTAINER_NAME"
+  printf '   %-12s %s\n' "image" "${IMAGE_NAME}:${VERSION_TAG}"
+  printf '   %-12s %s\n' "volume" "$VOLUME_NAME"
+
+  print_run_instructions
+
   if [[ -z "$TOKEN" ]]; then
-    printf '%s%s%s\n' "$C_DIM" \
+    printf '\n%s%s%s\n' "$C_DIM" \
       "Tip: re-run with --token <secret> before exposing this port beyond localhost." \
       "$C_RESET"
   fi

@@ -303,7 +303,9 @@ host — the project is compiled inside a multi-stage image build:
 
 It installs Docker Engine and the Compose plugin when they are missing,
 writes the runtime settings to `.env` (mode 0600), rebuilds only when the
-sources changed, and polls `/api/v1/about` until the UI actually answers.
+sources changed, polls `/api/v1/about` until the UI actually answers, and
+finishes with the copy-pasteable `docker compose` / `docker run` commands for
+starting, inspecting and stopping the container.
 Settings in `.env` drive `docker-compose.yml`, so plain Compose keeps working:
 
 ```sh
