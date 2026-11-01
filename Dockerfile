@@ -21,6 +21,9 @@
 FROM golang:1.27-alpine AS builder
 
 ARG VERSION=dev
+# SOURCE_HASH is the installer's fingerprint of the build context. It is stored
+# as a label so install_docker.sh can skip rebuilding an unchanged tree.
+ARG SOURCE_HASH=unknown
 
 WORKDIR /src
 
@@ -60,6 +63,14 @@ RUN adduser -D -H -u 65532 rdpshot && mkdir -p /data && chown 65532:65532 /data
 COPY --from=builder /out/rdpshot /usr/bin/rdpshot
 COPY --from=builder /src/wordlists /usr/share/rdpshot/wordlists
 
+ARG VERSION
+ARG SOURCE_HASH
+LABEL org.opencontainers.image.title="rdpshot" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="GPL-3.0" \
+      org.rdpshot.source-hash="${SOURCE_HASH}" \
+      org.rdpshot.variant="full"
+
 # The built-in wordlist defaults are relative paths; point them at the copies
 # shipped in the image so credential audits work without extra flags. Both
 # values are file paths, not credentials (the Dockerfile linter flags the
@@ -87,6 +98,14 @@ FROM gcr.io/distroless/static-debian12:nonroot AS slim
 COPY --from=builder /out/rdpshot /usr/bin/rdpshot
 COPY --from=builder /src/wordlists /usr/share/rdpshot/wordlists
 COPY --from=builder --chown=65532:65532 /out/data /data
+
+ARG VERSION
+ARG SOURCE_HASH
+LABEL org.opencontainers.image.title="rdpshot" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="GPL-3.0" \
+      org.rdpshot.source-hash="${SOURCE_HASH}" \
+      org.rdpshot.variant="slim"
 
 # The built-in wordlist defaults are relative paths; point them at the copies
 # shipped in the image so credential audits work without extra flags.

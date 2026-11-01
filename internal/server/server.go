@@ -260,6 +260,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/scans/{id}", s.handleGetScan)
 	mux.HandleFunc("PATCH /api/v1/scans/{id}", s.handleRenameScan)
 	mux.HandleFunc("DELETE /api/v1/scans/{id}", s.handleDeleteScan)
+	mux.HandleFunc("POST /api/v1/scans/bulk-delete", s.handleBulkDeleteScans)
 	mux.HandleFunc("POST /api/v1/scans/{id}/cancel", s.handleCancelScan)
 	mux.HandleFunc("POST /api/v1/scans/{id}/pause", s.handlePauseScan)
 	mux.HandleFunc("POST /api/v1/scans/{id}/resume", s.handleResumeScan)

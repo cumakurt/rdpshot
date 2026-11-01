@@ -357,6 +357,122 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if err := s.deleteScan(r, scan); err != nil {
+		s.internalError(w, r, "delete scan", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": scan.ID})
+}
+
+// bulkDeleteRequest is the JSON body of POST /api/v1/scans/bulk-delete.
+type bulkDeleteRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// bulkDeleteResult reports one entry per requested scan so the UI can tell the
+// operator exactly what happened in a partial-failure batch.
+type bulkDeleteResult struct {
+	ID    string `json:"id"`
+	Error string `json:"error,omitempty"`
+}
+
+// handleBulkDeleteScans deletes several scans in one request. Each scan goes
+// through the same cancel-wait-purge path as the single-scan delete, and
+// failures are reported per id rather than aborting the whole batch.
+func (s *Server) handleBulkDeleteScans(w http.ResponseWriter, r *http.Request) {
+	if !s.requireIntrusive(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	var payload bulkDeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		s.writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	ids, err := normaliseScanIDs(payload.IDs)
+	if err != nil {
+		s.writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	deleted := make([]string, 0, len(ids))
+	failed := make([]bulkDeleteResult, 0)
+	for _, id := range ids {
+		scan, err := s.deps.Store.GetScan(id)
+		if err != nil {
+			failed = append(failed, bulkDeleteResult{ID: id, Error: deleteScanErrorMessage(err)})
+			continue
+		}
+		if err := s.deleteScan(r, scan); err != nil {
+			failed = append(failed, bulkDeleteResult{ID: id, Error: deleteScanErrorMessage(err)})
+			continue
+		}
+		deleted = append(deleted, id)
+	}
+
+	status := http.StatusOK
+	if len(deleted) == 0 && len(failed) > 0 {
+		status = http.StatusInternalServerError
+		allMissing := true
+		for _, item := range failed {
+			if item.Error != "scan not found" {
+				allMissing = false
+				break
+			}
+		}
+		if allMissing {
+			status = http.StatusNotFound
+		}
+	}
+	s.writeJSON(w, status, map[string]any{
+		"deleted": deleted,
+		"failed":  failed,
+	})
+}
+
+// maxBulkDeleteScans bounds one bulk request so a single call cannot lock the
+// editor for an unbounded amount of time.
+const maxBulkDeleteScans = 200
+
+// normaliseScanIDs trims, de-duplicates and validates the requested ids while
+// preserving request order.
+func normaliseScanIDs(raw []string) ([]string, error) {
+	ids := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, id := range raw {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil, errors.New("scan ids must not be empty")
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("at least one scan id is required")
+	}
+	if len(ids) > maxBulkDeleteScans {
+		return nil, fmt.Errorf("at most %d scans can be deleted per request", maxBulkDeleteScans)
+	}
+	return ids, nil
+}
+
+// deleteScanErrorMessage keeps client-facing errors short and free of internal
+// wrapping noise while still distinguishing "not found" from real failures.
+func deleteScanErrorMessage(err error) string {
+	if errors.Is(err, store.ErrScanNotFound) {
+		return "scan not found"
+	}
+	return "delete failed"
+}
+
+// deleteScan performs the destructive delete of one scan: cancel any tracked
+// run, wait for the engine to release it, remove the database rows, purge
+// orphaned children, delete on-disk artifacts and write an audit entry.
+func (s *Server) deleteScan(r *http.Request, scan model.Scan) error {
 	if s.cancelScan(scan.ID) || !scan.Status.Terminal() {
 		scan.Status = model.ScanCancelled
 		_ = s.deps.Store.UpdateScan(scan)
@@ -366,12 +482,10 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	s.waitScanStopped(scan.ID, 8*time.Second)
 	screens, err := s.deps.Store.ListScreenshots(scan.ID)
 	if err != nil {
-		s.internalError(w, r, "load scan screenshots", err)
-		return
+		return fmt.Errorf("load screenshots: %w", err)
 	}
 	if err := s.deps.Store.DeleteScan(scan.ID); err != nil {
-		s.internalError(w, r, "delete scan", err)
-		return
+		return fmt.Errorf("delete scan: %w", err)
 	}
 	if _, err := s.deps.Store.PurgeOrphanScanChildren(); err != nil {
 		s.deps.Logger.Warn("purge orphan scan children", "error", err.Error())
@@ -384,7 +498,7 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	s.removeScanScreenshots(paths)
 	s.audit(r, "scan.delete", scan.ID, string(scan.Status))
 	s.deps.Logger.Info("scan deleted", "scan_id", scan.ID)
-	s.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": scan.ID})
+	return nil
 }
 
 // renameScanRequest is the JSON body of PATCH /api/v1/scans/{id}.

@@ -2183,6 +2183,13 @@
         row.style.display = show ? '' : 'none';
         if (show) {
           visible += 1;
+        } else {
+          // A hidden row must not stay in the selection, otherwise a bulk
+          // action would delete scans the operator can no longer see.
+          var hiddenBox = row.querySelector('[data-scan-select]');
+          if (hiddenBox && hiddenBox.checked) {
+            hiddenBox.checked = false;
+          }
         }
       });
       if (countEl) {
@@ -2196,6 +2203,7 @@
       if (emptyFilter) {
         emptyFilter.classList.toggle('hidden', visible > 0 || rows.length === 0);
       }
+      syncSelectionState();
     }
 
     if (statusSelect) {
@@ -2204,6 +2212,139 @@
     if (searchInput) {
       searchInput.addEventListener('input', applyFilter);
     }
+
+    /* ---------------- bulk selection ---------------- */
+
+    var selectAll = document.querySelector('[data-scans-select-all]');
+    var bulkBar = document.querySelector('[data-scans-bulk-bar]');
+    var bulkCount = document.querySelector('[data-scans-bulk-count]');
+    var bulkDeleteBtn = document.querySelector('[data-scans-bulk-delete]');
+    var clearBtn = document.querySelector('[data-scans-clear-selection]');
+    if (!selectAll || !bulkBar) {
+      return;
+    }
+
+    function rowBoxes(onlyVisible) {
+      var list = [];
+      Array.prototype.forEach.call(rows, function (row) {
+        if (onlyVisible && row.style.display === 'none') {
+          return;
+        }
+        var box = row.querySelector('[data-scan-select]');
+        if (box) {
+          list.push(box);
+        }
+      });
+      return list;
+    }
+
+    function selectedIDs() {
+      var ids = [];
+      rowBoxes(false).forEach(function (box) {
+        if (box.checked) {
+          ids.push(box.getAttribute('data-scan-select'));
+        }
+      });
+      return ids;
+    }
+
+    function syncSelectionState() {
+      var visibleBoxes = rowBoxes(true);
+      var selected = selectedIDs();
+      if (bulkCount) {
+        bulkCount.textContent = selected.length === 1
+          ? '1 scan selected'
+          : selected.length + ' scans selected';
+      }
+      bulkBar.hidden = selected.length === 0;
+      bulkDeleteBtn.disabled = selected.length === 0;
+
+      var visibleSelected = visibleBoxes.filter(function (box) { return box.checked; }).length;
+      selectAll.checked = visibleBoxes.length > 0 && visibleSelected === visibleBoxes.length;
+      selectAll.indeterminate = visibleSelected > 0 && visibleSelected < visibleBoxes.length;
+      selectAll.disabled = visibleBoxes.length === 0;
+    }
+
+    selectAll.addEventListener('change', function () {
+      var checked = selectAll.checked;
+      rowBoxes(true).forEach(function (box) {
+        box.checked = checked;
+      });
+      syncSelectionState();
+    });
+
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function () {
+        rowBoxes(false).forEach(function (box) {
+          box.checked = false;
+        });
+        syncSelectionState();
+      });
+    }
+
+    Array.prototype.forEach.call(rowBoxes(false), function (box) {
+      box.addEventListener('change', syncSelectionState);
+    });
+
+    if (bulkDeleteBtn) {
+      bulkDeleteBtn.addEventListener('click', function () {
+        var ids = selectedIDs();
+        if (!ids.length) {
+          portalNotify('Select at least one scan to delete', 'error');
+          return;
+        }
+        var message = ids.length === 1
+          ? 'Delete 1 scan and its stored artifacts? Active runs are stopped first. This cannot be undone.'
+          : 'Delete ' + ids.length + ' scans and their stored artifacts? Active runs are stopped first. This cannot be undone.';
+        portalConfirm({
+          title: 'Delete selected scans',
+          message: message,
+          confirmLabel: 'Delete ' + ids.length,
+          cancelLabel: 'Keep scans',
+          danger: true,
+          eyebrow: 'Destructive'
+        }).then(function (ok) {
+          if (!ok) {
+            return;
+          }
+          bulkDeleteBtn.disabled = true;
+          bulkDeleteBtn.textContent = 'Deleting…';
+          fetch('/api/v1/scans/bulk-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: ids })
+          })
+            .then(function (resp) {
+              return resp.json().then(function (body) {
+                return { ok: resp.ok, body: body };
+              });
+            })
+            .then(function (result) {
+              var failed = (result.body && result.body.failed) || [];
+              var deleted = (result.body && result.body.deleted) || [];
+              if (!result.ok && !deleted.length) {
+                throw new Error((failed[0] && failed[0].error) || 'bulk delete failed');
+              }
+              if (failed.length) {
+                portalNotify(
+                  'Deleted ' + deleted.length + ', failed ' + failed.length + '. Reloading…',
+                  'error'
+                );
+                window.setTimeout(function () { window.location.reload(); }, 1500);
+                return;
+              }
+              window.location.reload();
+            })
+            .catch(function (err) {
+              bulkDeleteBtn.disabled = false;
+              bulkDeleteBtn.textContent = 'Delete selected';
+              portalNotify('Unable to delete scans: ' + err.message, 'error');
+            });
+        });
+      });
+    }
+
+    syncSelectionState();
   }
 
   function initGallery() {

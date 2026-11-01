@@ -826,6 +826,114 @@ func TestDeleteActiveScan(t *testing.T) {
 	}
 }
 
+func postJSON(t *testing.T, url string, payload any) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post %s: %v", url, err)
+	}
+	return resp
+}
+
+func TestBulkDeleteScans(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	seededScan(t, env.store, "scan-bulk0000000001", model.ScanCompleted)
+	seededScan(t, env.store, "scan-bulk0000000002", model.ScanCompleted)
+	seededScan(t, env.store, "scan-bulk0000000003", model.ScanCompleted)
+
+	resp := postJSON(t, env.http.URL+"/api/v1/scans/bulk-delete", map[string]any{
+		"ids": []string{"scan-bulk0000000001", "scan-bulk0000000003"},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bulk delete status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	var result struct {
+		Deleted []string           `json:"deleted"`
+		Failed  []bulkDeleteResult `json:"failed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode bulk delete: %v", err)
+	}
+	resp.Body.Close()
+	if len(result.Deleted) != 2 || len(result.Failed) != 0 {
+		t.Fatalf("bulk delete result = %+v", result)
+	}
+
+	for _, id := range []string{"scan-bulk0000000001", "scan-bulk0000000003"} {
+		if _, err := env.store.GetScan(id); !errors.Is(err, store.ErrScanNotFound) {
+			t.Fatalf("scan %s still present: %v", id, err)
+		}
+	}
+	if _, err := env.store.GetScan("scan-bulk0000000002"); err != nil {
+		t.Fatalf("unselected scan was removed: %v", err)
+	}
+}
+
+func TestBulkDeleteScansReportsPartialFailure(t *testing.T) {
+	env := newTestEnv(t, Config{})
+	seededScan(t, env.store, "scan-bulk0000000011", model.ScanCompleted)
+
+	// Duplicate ids collapse, and an unknown id lands in "failed" without
+	// aborting the scans that do exist.
+	resp := postJSON(t, env.http.URL+"/api/v1/scans/bulk-delete", map[string]any{
+		"ids": []string{"scan-bulk0000000011", "scan-bulk0000000011", "scan-missing00000001"},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bulk delete status = %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	var result struct {
+		Deleted []string           `json:"deleted"`
+		Failed  []bulkDeleteResult `json:"failed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode bulk delete: %v", err)
+	}
+	resp.Body.Close()
+	if len(result.Deleted) != 1 || len(result.Failed) != 1 {
+		t.Fatalf("bulk delete result = %+v", result)
+	}
+	if result.Failed[0].ID != "scan-missing00000001" || result.Failed[0].Error != "scan not found" {
+		t.Fatalf("unexpected failure entry: %+v", result.Failed[0])
+	}
+}
+
+func TestBulkDeleteScansRejectsBadInput(t *testing.T) {
+	env := newTestEnv(t, Config{})
+
+	for name, payload := range map[string]any{
+		"empty ids":   map[string]any{"ids": []string{}},
+		"blank id":    map[string]any{"ids": []string{" "}},
+		"missing key": map[string]any{},
+	} {
+		resp := postJSON(t, env.http.URL+"/api/v1/scans/bulk-delete", payload)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400", name, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+
+	tooMany := make([]string, maxBulkDeleteScans+1)
+	for i := range tooMany {
+		tooMany[i] = "scan-bulk" + strconv.Itoa(i)
+	}
+	resp := postJSON(t, env.http.URL+"/api/v1/scans/bulk-delete", map[string]any{"ids": tooMany})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized batch status = %d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
 func TestPauseResumeScan(t *testing.T) {
 	env := newTestEnv(t, Config{})
 	seededScan(t, env.store, "scan-pause0000000001", model.ScanRunning)

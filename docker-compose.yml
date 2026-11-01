@@ -9,20 +9,30 @@
 # and reports work, but in-container screenshot capture does not. For
 # screenshot capture, switch the build target to "full", which ships FreeRDP,
 # Xvfb and ImageMagick.
+#
+# Typically started through ./install_docker.sh, which writes the values below
+# to .env. Every setting has a default, so a plain `docker compose up -d` keeps
+# working without the installer.
 
 services:
   rdpshot:
     build:
       context: .
-      target: slim
+      target: ${RDSHOT_BUILD_TARGET:-slim}
       args:
-        VERSION: dev
-    image: rdpshot:latest
+        VERSION: ${RDSHOT_VERSION:-dev}
+        SOURCE_HASH: ${RDSHOT_SOURCE_HASH:-unknown}
+    image: ${RDSHOT_IMAGE:-rdpshot:latest}
     container_name: rdpshot
     ports:
-      - "8722:8722"
+      # Set RDSHOT_BIND_ADDR=127.0.0.1 to keep the UI off the network.
+      - "${RDSHOT_BIND_ADDR:-0.0.0.0}:${RDSHOT_HOST_PORT:-8722}:8722"
     volumes:
       - rdpshot-data:/data
+    # Bearer token enforced on every request; written to .env by the installer
+    # when --token is supplied.
+    environment:
+      RDSHOT_TOKEN: ${RDSHOT_TOKEN:-}
     restart: unless-stopped
     # The container only writes to /data; everything else stays read-only.
     read_only: true
@@ -30,9 +40,9 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
-    # Set a bearer token when the port is reachable beyond localhost.
-    # environment:
-    #   RDSHOT_TOKEN: change-me
 
 volumes:
   rdpshot-data:
+    # The key stays constant so Compose can reference it; the on-disk name is
+    # configurable through the installer.
+    name: ${RDSHOT_VOLUME:-rdpshot-data}

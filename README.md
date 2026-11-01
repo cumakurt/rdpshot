@@ -138,6 +138,10 @@ and a built-in RDP honeypot/decoy listener.
 * **Active Directory / LDAP auto-discovery** — queries domain controllers for
   Windows servers and RDP SPNs.
 * **Schedules** — five-field cron or interval cadence with optional webhooks.
+* **Bulk scan cleanup** — tick rows (or select-all) in the Scans Dashboard and
+  delete them in one request. Hidden rows drop out of the selection, active
+  runs are cancelled first, and per-id failures are reported without aborting
+  the rest (`POST /api/v1/scans/bulk-delete`).
 * **Dark / Light theme** — Command Center (Dark) and Corporate Clean (Light).
 * **Persistence** — SQLite (pure Go, no CGO), schema v6.
 
@@ -283,9 +287,28 @@ make cross
 
 ### Docker
 
+The fastest path is the Docker installer, which follows the same
+single-line progress bar as `install.sh` but needs no Go toolchain on the
+host — the project is compiled inside a multi-stage image build:
+
 ```sh
-docker build -t rdpshot .              # slim runtime (default): web UI + scanning
-docker build --target full -t rdpshot:full .   # adds FreeRDP/Xvfb/ImageMagick for screenshots
+./install_docker.sh                        # build image + start the container
+./install_docker.sh --localhost            # publish on 127.0.0.1 only
+./install_docker.sh --token "$(openssl rand -hex 24)"
+./install_docker.sh --target full          # add FreeRDP/Xvfb/ImageMagick
+./install_docker.sh --force                # rebuild an unchanged tree
+./install_docker.sh --dry-run              # show what would happen
+./install_docker.sh --uninstall            # container, image, volume, .env
+```
+
+It installs Docker Engine and the Compose plugin when they are missing,
+writes the runtime settings to `.env` (mode 0600), rebuilds only when the
+sources changed, and polls `/api/v1/about` until the UI actually answers.
+Settings in `.env` drive `docker-compose.yml`, so plain Compose keeps working:
+
+```sh
+docker build -t rdpshot .                       # slim runtime (default)
+docker build --target full -t rdpshot:full .    # adds the capture toolchain
 docker run --rm -p 8722:8722 -v rdpshot-data:/data rdpshot
 # or
 docker compose up -d
@@ -453,6 +476,7 @@ Web pages: `/` command-center dashboard, `/scans` scans dashboard, `/scans/{id}`
 | `GET` | `/api/v1/scans/{id}` | Scan detail and progress |
 | `PATCH` | `/api/v1/scans/{id}` | Rename a scan |
 | `DELETE` | `/api/v1/scans/{id}` | Delete a finished scan and its artifacts |
+| `POST` | `/api/v1/scans/bulk-delete` | Delete several scans in one request (`{"ids":[...]}`) |
 | `POST` | `/api/v1/scans/{id}/cancel` | Cancel a running or paused scan |
 | `POST` | `/api/v1/scans/{id}/pause` | Pause a running scan (queued work is kept) |
 | `POST` | `/api/v1/scans/{id}/resume` | Resume a paused scan |

@@ -10,3 +10,5 @@ docs/
 *.db-shm
 *.png
 *.log
+# Runtime settings (may contain RDSHOT_TOKEN); Compose reads .env from the host.
+.env

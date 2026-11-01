@@ -8,3 +8,5 @@ outputs/
 .idea/
 .vscode/
 *.log
+# Written by install_docker.sh; contains runtime secrets (RDSHOT_TOKEN).
+.env

@@ -158,10 +158,20 @@
             </div>
           </div>
         </div>
+        <div class="card-body scans-bulk-bar" data-scans-bulk-bar hidden>
+          <p class="card-hint" data-scans-bulk-count>0 selected</p>
+          <div class="scans-bulk-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-scans-clear-selection>Clear selection</button>
+            <button type="button" class="btn btn-danger btn-sm" data-scans-bulk-delete>Delete selected</button>
+          </div>
+        </div>
         <div class="table-wrap">
           <table class="table" data-scans-table>
             <thead>
               <tr>
+                <th class="col-select">
+                  <input type="checkbox" data-scans-select-all aria-label="Select all visible scans">
+                </th>
                 <th>Name</th>
                 <th>Engagement</th>
                 <th>Status</th>
@@ -180,6 +190,9 @@
                 <tr class="row-hover" data-scan-row
                   data-status="{{ .Status }}"
                   data-search="{{ .Name }} {{ .ID }} {{ .Engagement }}{{ range .Tags }} {{ . }}{{ end }}">
+                  <td class="col-select">
+                    <input type="checkbox" data-scan-select="{{ .ID }}" aria-label="Select scan {{ .Name }}">
+                  </td>
                   <td>
                     <p class="cell-strong"><a href="/scans/{{ .ID }}">{{ .Name }}</a></p>
                     <p class="cell-sub">{{ .ID }}{{ if .Tags }} · {{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}{{ $t }}{{ end }}{{ end }}</p>
@@ -214,13 +227,13 @@
                 {{ end }}
               {{ else }}
                 <tr data-scans-empty-static>
-                  <td colspan="10" class="table-empty">
+                  <td colspan="11" class="table-empty">
                     No scans recorded yet. Start one from the <a href="/">Command Center</a>.
                   </td>
                 </tr>
               {{ end }}
               <tr class="hidden" data-scans-empty-filter>
-                <td colspan="10" class="table-empty">No scans match the current filters.</td>
+                <td colspan="11" class="table-empty">No scans match the current filters.</td>
               </tr>
             </tbody>
           </table>
