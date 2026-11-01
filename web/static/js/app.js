@@ -3795,7 +3795,7 @@ function initDecoyListener() {
   if (clearBtn) {
     clearBtn.addEventListener('click', function () {
       if (tbody) {
-        tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:2rem;opacity:0.5">Events cleared. New connections will appear here.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="13" class="table-empty">Events cleared. New connections will appear here.</td></tr>';
       }
       if (eventCount) eventCount.textContent = '0';
       if (credCount)  credCount.textContent  = '0';
@@ -3813,7 +3813,7 @@ function renderDecoyEvents(events, count, tbody, eventCount, credCount) {
   if (eventCount) eventCount.textContent = count;
   if (!tbody) return;
   if (!events || events.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:2rem;opacity:0.5">No connections captured yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" class="table-empty">No connections captured yet.</td></tr>';
     return;
   }
 

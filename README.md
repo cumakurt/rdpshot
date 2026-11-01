@@ -152,12 +152,15 @@ Full-size images live under [`docs/screenshots/`](docs/screenshots/).
 
 ### Scans Dashboard
 
-KPI cards, scan inventory filters, and a compact screenshot grid under the
-inventory table.
+KPI cards, scan inventory filters, engagement/tag labels, and a compact
+screenshot grid under the inventory table.
 
 ![Scans Dashboard](docs/screenshots/scans.jpg)
 
 ### Scan detail
+
+Findings with the Table/Kanban toggle, compliance radar, verified credentials
+and captured screenshots for one audit.
 
 ![Scan detail](docs/screenshots/scan_detail.jpg)
 
@@ -168,6 +171,9 @@ Real pre-auth login-screen evidence (synthetic detection cards omitted).
 ![Gallery](docs/screenshots/gallery.jpg)
 
 ### Reports hub
+
+Posture trend, compliance radar, SIEM streaming, report branding, alert rules
+and the per-severity breakdown with one-click PDF/HTML/CSV export.
 
 ![Reports](docs/screenshots/reports.jpg)
 
@@ -186,6 +192,21 @@ Exact first-run date/time picker plus interval or cron cadence.
 ### Compare
 
 ![Compare scans](docs/screenshots/compare.jpg)
+
+### MITRE ATT&CK coverage
+
+Eight RDP-relevant techniques with `detected` / `potential` / `mitigated` /
+`not_applicable` status and the evidence tags that produced it, loaded per
+scan or engagement.
+
+![MITRE ATT&CK heatmap](docs/screenshots/mitre.jpg)
+
+### Decoy / honeypot listener
+
+Configurable fake RDP server with TLS profile, interactive mode and the live
+capture table for connection stages, NTLM identity material and TLS metadata.
+
+![Decoy listener](docs/screenshots/decoy.jpg)
 
 ## Architecture
 
